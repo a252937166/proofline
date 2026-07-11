@@ -21,9 +21,88 @@ import {
   type AnchorRuntimeConfig,
 } from "./config.js";
 
+interface ExplorerTransaction {
+  hash: Hex;
+  status: string;
+  result: string;
+  revertReason: string | null;
+  blockNumber: bigint;
+  timestamp: string;
+  from: Address;
+  to: Address;
+  input: Hex;
+}
+
+export async function explorerTransaction(
+  baseUrl: string,
+  txHash: Hex,
+): Promise<ExplorerTransaction | null> {
+  try {
+    const response = await fetch(
+      `${baseUrl.replace(/\/$/, "")}/v2/transactions/${txHash}`,
+      { headers: { accept: "application/json" }, signal: AbortSignal.timeout(5_000) },
+    );
+    if (!response.ok) return null;
+    const body = (await response.json()) as Record<string, unknown>;
+    const from = body.from as { hash?: unknown } | undefined;
+    const to = body.to as { hash?: unknown } | undefined;
+    if (
+      typeof body.hash !== "string" ||
+      body.hash.toLowerCase() !== txHash.toLowerCase() ||
+      typeof body.status !== "string" ||
+      body.status.toLowerCase() !== "ok" ||
+      typeof body.result !== "string" ||
+      body.result.toLowerCase() !== "success" ||
+      body.revert_reason !== null ||
+      typeof body.block_number !== "number" ||
+      !Number.isSafeInteger(body.block_number) ||
+      body.block_number <= 0 ||
+      typeof body.timestamp !== "string" ||
+      !Number.isFinite(new Date(body.timestamp).getTime()) ||
+      typeof from?.hash !== "string" ||
+      !/^0x[0-9a-fA-F]{40}$/.test(from.hash) ||
+      typeof to?.hash !== "string" ||
+      !/^0x[0-9a-fA-F]{40}$/.test(to.hash) ||
+      typeof body.raw_input !== "string" ||
+      !/^0x[0-9a-fA-F]*$/.test(body.raw_input)
+    ) {
+      return null;
+    }
+    return {
+      hash: body.hash as Hex,
+      status: body.status,
+      result: body.result,
+      revertReason: body.revert_reason as string | null,
+      blockNumber: BigInt(body.block_number),
+      timestamp: body.timestamp,
+      from: from.hash as Address,
+      to: to.hash as Address,
+      input: body.raw_input as Hex,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function blockContainsTransaction(
+  transactions: readonly (Hex | { hash: Hex })[],
+  txHash: Hex,
+): boolean {
+  return transactions.some((transaction) =>
+    (typeof transaction === "string" ? transaction : transaction.hash)
+      .toLowerCase()
+      === txHash.toLowerCase(),
+  );
+}
+
+function wait(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
 export interface AnchorInput {
   matchId: string;
   verification: VerificationResult;
+  evidenceRoot: Hex;
   anchoredAt: string;
 }
 
@@ -33,6 +112,7 @@ export interface AnchorService {
   verify(input: {
     matchId: string;
     eventHash: Hex;
+    evidenceRoot: Hex;
     verificationConfidenceBps: number;
     anchorConfidenceBps: number;
     observedAt: string;
@@ -62,19 +142,57 @@ const registryAbi = [
   },
   {
     type: "function",
-    name: "anchorProof",
+    name: "getRevisionCount",
+    stateMutability: "view",
+    inputs: [{ name: "matchIdHash", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint64" }],
+  },
+  {
+    type: "function",
+    name: "getLatest",
+    stateMutability: "view",
+    inputs: [{ name: "matchIdHash", type: "bytes32" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "matchIdHash", type: "bytes32" },
+          { name: "eventHash", type: "bytes32" },
+          { name: "evidenceRoot", type: "bytes32" },
+          { name: "previousDecisionHash", type: "bytes32" },
+          { name: "decisionHash", type: "bytes32" },
+          { name: "revision", type: "uint64" },
+          { name: "observedAt", type: "uint64" },
+          { name: "anchoredAt", type: "uint64" },
+          { name: "confidenceBps", type: "uint16" },
+          { name: "state", type: "uint8" },
+          { name: "anchoredBy", type: "address" },
+        ],
+      },
+    ],
+  },
+  {
+    type: "function",
+    name: "appendRevision",
     stateMutability: "nonpayable",
     inputs: [
       { name: "matchIdHash", type: "bytes32" },
       { name: "eventHash", type: "bytes32" },
+      { name: "evidenceRoot", type: "bytes32" },
       { name: "confidenceBps", type: "uint16" },
       { name: "observedAt", type: "uint64" },
+      { name: "state", type: "uint8" },
+      { name: "expectedPreviousDecisionHash", type: "bytes32" },
     ],
-    outputs: [],
+    outputs: [
+      { name: "revision", type: "uint64" },
+      { name: "decisionHash", type: "bytes32" },
+    ],
   },
   {
     type: "function",
-    name: "verifyProof",
+    name: "verifyLatestSettlementProof",
     stateMutability: "view",
     inputs: [
       { name: "matchIdHash", type: "bytes32" },
@@ -86,12 +204,13 @@ const registryAbi = [
       { name: "confidenceBps", type: "uint16" },
       { name: "revision", type: "uint64" },
       { name: "decisionHash", type: "bytes32" },
+      { name: "evidenceRoot", type: "bytes32" },
     ],
   },
 ] as const;
 
 const EXPECTED_REGISTRY_ID = keccak256(
-  stringToHex("proofline.match-proof-registry.v1"),
+  stringToHex("proofline.match-proof-registry.v3"),
 );
 
 export class DemoAnchorService implements AnchorService {
@@ -100,7 +219,7 @@ export class DemoAnchorService implements AnchorService {
   async anchor(input: AnchorInput): Promise<AnchorRecord> {
     const txHash = keccak256(
       stringToHex(
-        `proofline.demo.anchor.v1:${input.matchId}:${input.verification.canonical.eventHash}:${input.verification.confidenceBps}:${input.anchoredAt}`,
+        `proofline.demo.anchor.v2:${input.matchId}:${input.verification.canonical.eventHash}:${input.evidenceRoot}:${input.verification.confidenceBps}:${input.anchoredAt}`,
       ),
     );
 
@@ -108,6 +227,7 @@ export class DemoAnchorService implements AnchorService {
       receipt: {
         mode: "demo",
         eventHash: input.verification.canonical.eventHash,
+        evidenceRoot: input.evidenceRoot,
         confidenceBps: input.verification.confidenceBps,
         anchoredAt: input.anchoredAt,
         confirmed: true,
@@ -197,7 +317,7 @@ export class InjectiveAnchorService implements AnchorService {
       throw new Error("No MatchProofRegistry code exists at the configured address.");
     }
     if (registryId !== EXPECTED_REGISTRY_ID) {
-      throw new Error("The configured contract is not a Proofline MatchProofRegistry v1 instance.");
+      throw new Error("The configured contract is not a Proofline MatchProofRegistry v3 instance.");
     }
     if (!isAnchorer) {
       throw new Error("The configured API signer does not have the registry anchorer role.");
@@ -206,40 +326,317 @@ export class InjectiveAnchorService implements AnchorService {
       throw new Error("The configured API signer has no test INJ for anchor gas.");
     }
 
-    const txHash = await wallet.writeContract({
-      account,
+    const latestMatches = (latest: {
+      eventHash: Hex;
+      evidenceRoot: Hex;
+      confidenceBps: number;
+      state: number;
+      anchoredAt: bigint;
+      revision: bigint;
+      decisionHash: Hex;
+    }): boolean =>
+      latest.eventHash === input.verification.canonical.eventHash &&
+      latest.evidenceRoot === input.evidenceRoot &&
+      latest.confidenceBps === input.verification.confidenceBps &&
+      (latest.state === 1 || latest.state === 3);
+    const idempotentRecord = async (latest: {
+      anchoredAt: bigint;
+      revision: bigint;
+      previousDecisionHash: Hex;
+    }): Promise<AnchorRecord> => {
+      let indexed: ExplorerTransaction | null = null;
+      try {
+        const response = await fetch(
+          `${this.config.explorerApiUrl.replace(/\/$/, "")}/v2/addresses/${this.config.registryAddress}/transactions?filter=to`,
+          {
+            headers: { accept: "application/json" },
+            signal: AbortSignal.timeout(5_000),
+          },
+        );
+        if (response.ok) {
+          const page = (await response.json()) as { items?: unknown };
+          if (Array.isArray(page.items)) {
+            for (const item of page.items.slice(0, 50)) {
+              if (!item || typeof item !== "object") continue;
+              const candidate = item as Record<string, unknown>;
+              const candidateTo = candidate.to as { hash?: unknown } | null;
+              if (
+                typeof candidate.hash !== "string" ||
+                !/^0x[0-9a-fA-F]{64}$/.test(candidate.hash) ||
+                candidate.status !== "ok" ||
+                candidate.result !== "success" ||
+                candidate.revert_reason !== null ||
+                typeof candidate.block_number !== "number" ||
+                !Number.isSafeInteger(candidate.block_number) ||
+                typeof candidate.timestamp !== "string" ||
+                Math.floor(new Date(candidate.timestamp).getTime() / 1_000) !==
+                  Number(latest.anchoredAt) ||
+                typeof candidateTo?.hash !== "string" ||
+                candidateTo.hash.toLowerCase() !==
+                  this.config.registryAddress.toLowerCase() ||
+                typeof candidate.raw_input !== "string" ||
+                !/^0x[0-9a-fA-F]+$/.test(candidate.raw_input)
+              ) {
+                continue;
+              }
+              try {
+                const decoded = decodeFunctionData({
+                  abi: registryAbi,
+                  data: candidate.raw_input as Hex,
+                });
+                if (decoded.functionName !== "appendRevision") continue;
+                const [
+                  txMatchIdHash,
+                  txEventHash,
+                  txEvidenceRoot,
+                  txConfidenceBps,
+                  txObservedAt,
+                  txState,
+                  txPreviousDecisionHash,
+                ] = decoded.args;
+                if (
+                  txMatchIdHash !== matchIdHash ||
+                  txEventHash !== input.verification.canonical.eventHash ||
+                  txEvidenceRoot !== input.evidenceRoot ||
+                  txConfidenceBps !== input.verification.confidenceBps ||
+                  txObservedAt !== observedAt ||
+                  (txState !== 1 && txState !== 3) ||
+                  txPreviousDecisionHash !== latest.previousDecisionHash
+                ) {
+                  continue;
+                }
+                const block = await publicClient.getBlock({
+                  blockNumber: BigInt(candidate.block_number),
+                  includeTransactions: true,
+                });
+                if (
+                  !blockContainsTransaction(
+                    block.transactions,
+                    candidate.hash as Hex,
+                  )
+                ) {
+                  continue;
+                }
+                indexed = {
+                  hash: candidate.hash as Hex,
+                  status: "ok",
+                  result: "success",
+                  revertReason: null,
+                  blockNumber: BigInt(candidate.block_number),
+                  timestamp: candidate.timestamp,
+                  from: account.address,
+                  to: candidateTo.hash as Address,
+                  input: candidate.raw_input as Hex,
+                };
+                break;
+              } catch {
+                continue;
+              }
+            }
+          }
+        }
+      } catch {
+        indexed = null;
+      }
+      return {
+        receipt: {
+        mode: "injective-testnet",
+        eventHash: input.verification.canonical.eventHash,
+        evidenceRoot: input.evidenceRoot,
+        confidenceBps: input.verification.confidenceBps,
+        anchoredAt: new Date(Number(latest.anchoredAt) * 1_000).toISOString(),
+        confirmed: true,
+        contractAddress: this.config.registryAddress,
+          ...(indexed
+            ? {
+                txHash: indexed.hash,
+                blockNumber: indexed.blockNumber.toString(),
+                explorerUrl: `${this.config.explorerUrl.replace(/\/$/, "")}/tx/${indexed.hash}`,
+                receiptIndexing: "explorer-api-and-rpc-state" as const,
+              }
+            : {
+                receiptIndexing: "state-only-idempotent" as const,
+                transactionLinkUnavailable: true,
+              }),
+        },
+        simulated: false,
+        disclosure: indexed
+          ? "Injective EVM testnet commitment already existed as the match-wide latest revision; its original canonical transaction was recovered from the official Explorer API."
+          : "Injective EVM testnet commitment already existed as the match-wide latest revision; no duplicate transaction was sent, but the original transaction link was unavailable in the bounded Explorer lookup.",
+      };
+    };
+
+    const revisionCount = await publicClient.readContract({
       address: this.config.registryAddress,
       abi: registryAbi,
-      functionName: "anchorProof",
-      args: [
-        matchIdHash,
-        input.verification.canonical.eventHash,
-        input.verification.confidenceBps,
-        observedAt,
-      ],
-      chain,
+      functionName: "getRevisionCount",
+      args: [matchIdHash],
     });
-    const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-    if (receipt.status !== "success") {
-      throw new Error(`Injective anchor transaction ${txHash} reverted.`);
+    const latestBefore =
+      revisionCount > 0n
+        ? await publicClient.readContract({
+            address: this.config.registryAddress,
+            abi: registryAbi,
+            functionName: "getLatest",
+            args: [matchIdHash],
+          })
+        : undefined;
+    if (latestBefore && latestMatches(latestBefore)) {
+      return idempotentRecord(latestBefore);
     }
-    const anchoredBlock = await publicClient.getBlock({
-      blockNumber: receipt.blockNumber,
-    });
+    const expectedPreviousDecisionHash =
+      latestBefore?.decisionHash ?? (`0x${"0".repeat(64)}` as Hex);
+    let simulated;
+    try {
+      simulated = await publicClient.simulateContract({
+        account,
+        address: this.config.registryAddress,
+        abi: registryAbi,
+        functionName: "appendRevision",
+        args: [
+          matchIdHash,
+          input.verification.canonical.eventHash,
+          input.evidenceRoot,
+          input.verification.confidenceBps,
+          observedAt,
+          1,
+          expectedPreviousDecisionHash,
+        ],
+      });
+    } catch {
+      const latestAfterSimulationConflict = await publicClient.readContract({
+        address: this.config.registryAddress,
+        abi: registryAbi,
+        functionName: "getLatest",
+        args: [matchIdHash],
+      });
+      if (latestMatches(latestAfterSimulationConflict)) {
+        return idempotentRecord(latestAfterSimulationConflict);
+      }
+      throw new Error(
+        "The match decision changed concurrently; retry after reading the latest revision.",
+      );
+    }
+    const txHash = await wallet.writeContract(simulated.request);
+    const confirmationDeadline = Date.now() + 45_000;
+    let receiptBlockNumber: bigint | undefined;
+    try {
+      const indexedReceipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        timeout: 8_000,
+        pollingInterval: 1_000,
+      });
+      if (indexedReceipt.status === "reverted") {
+        throw new Error("anchor-transaction-reverted");
+      }
+      receiptBlockNumber = indexedReceipt.blockNumber;
+    } catch {
+      // Injective can expose canonical block/state before its EVM receipt
+      // index. The bounded Explorer+RPC fallback below is the authority path.
+    }
+
+    let canonicalBlock:
+      | Awaited<ReturnType<typeof publicClient.getBlock>>
+      | undefined;
+    let explorerTx: ExplorerTransaction | null = null;
+    let latestAfter:
+      | readonly [boolean, number, number, bigint, Hex, Hex]
+      | undefined;
+    while (Date.now() < confirmationDeadline) {
+      [explorerTx, latestAfter] = await Promise.all([
+        explorerTransaction(this.config.explorerApiUrl, txHash),
+        publicClient.readContract({
+          address: this.config.registryAddress,
+          abi: registryAbi,
+          functionName: "verifyLatestSettlementProof",
+          args: [matchIdHash, input.verification.canonical.eventHash],
+        }),
+      ]);
+      const [valid, state, anchoredConfidenceBps, , , anchoredEvidenceRoot] =
+        latestAfter;
+      if (
+        explorerTx &&
+        explorerTx.status.toLowerCase() === "ok" &&
+        explorerTx.result.toLowerCase() === "success" &&
+        explorerTx.revertReason === null &&
+        explorerTx.to.toLowerCase() ===
+          this.config.registryAddress.toLowerCase() &&
+        valid &&
+        state === 1 &&
+        anchoredConfidenceBps === input.verification.confidenceBps &&
+        anchoredEvidenceRoot === input.evidenceRoot
+      ) {
+        let callMatches = false;
+        try {
+          const decoded = decodeFunctionData({
+            abi: registryAbi,
+            data: explorerTx.input,
+          });
+          if (decoded.functionName === "appendRevision") {
+            const [
+              txMatchIdHash,
+              txEventHash,
+              txEvidenceRoot,
+              txConfidenceBps,
+              txObservedAt,
+              txState,
+              txPreviousDecisionHash,
+            ] = decoded.args;
+            callMatches =
+              txMatchIdHash === matchIdHash &&
+              txEventHash === input.verification.canonical.eventHash &&
+              txEvidenceRoot === input.evidenceRoot &&
+              txConfidenceBps === input.verification.confidenceBps &&
+              txObservedAt === observedAt &&
+              txState === 1 &&
+              txPreviousDecisionHash === expectedPreviousDecisionHash;
+          }
+        } catch {
+          callMatches = false;
+        }
+        if (callMatches) {
+          const block = await publicClient.getBlock({
+            blockNumber: explorerTx.blockNumber,
+            includeTransactions: true,
+          });
+          if (blockContainsTransaction(block.transactions, txHash)) {
+            canonicalBlock = block;
+            break;
+          }
+        }
+      }
+      await wait(1_000);
+    }
+
+    if (!canonicalBlock || !explorerTx || !latestAfter) {
+      const latestAfterConflict = await publicClient.readContract({
+        address: this.config.registryAddress,
+        abi: registryAbi,
+        functionName: "verifyLatestSettlementProof",
+        args: [matchIdHash, input.verification.canonical.eventHash],
+      });
+      if (
+        latestAfterConflict[0] &&
+        latestAfterConflict[5] === input.evidenceRoot
+      ) {
+        throw new Error(
+          `Anchor ${txHash} reached registry state, but its canonical transaction block was not indexed within 45 seconds.`,
+        );
+      }
+      throw new Error(
+        "The match decision changed concurrently; the API refused to overwrite the newer revision.",
+      );
+    }
     const chainAnchoredAt = new Date(
-      Number(anchoredBlock.timestamp) * 1_000,
+      Number(canonicalBlock.timestamp) * 1_000,
     ).toISOString();
-    const [valid, state, anchoredConfidenceBps] = await publicClient.readContract({
-      address: this.config.registryAddress,
-      abi: registryAbi,
-      functionName: "verifyProof",
-      args: [matchIdHash, input.verification.canonical.eventHash],
-      blockNumber: receipt.blockNumber,
-    });
+    const [valid, state, anchoredConfidenceBps, , , anchoredEvidenceRoot] =
+      latestAfter;
     if (
       !valid ||
       state !== 1 ||
-      anchoredConfidenceBps !== input.verification.confidenceBps
+      anchoredConfidenceBps !== input.verification.confidenceBps ||
+      anchoredEvidenceRoot !== input.evidenceRoot
     ) {
       throw new Error(
         `Anchor transaction ${txHash} succeeded but the registry postcondition did not match the submitted proof.`,
@@ -250,25 +647,31 @@ export class InjectiveAnchorService implements AnchorService {
       receipt: {
         mode: "injective-testnet",
         eventHash: input.verification.canonical.eventHash,
+        evidenceRoot: input.evidenceRoot,
         confidenceBps: input.verification.confidenceBps,
         // A real receipt is timed from the canonical chain block, never from
         // the replay clock or the API host clock.
         anchoredAt: chainAnchoredAt,
         confirmed: true,
         txHash,
-        blockNumber: receipt.blockNumber.toString(),
+        blockNumber: explorerTx.blockNumber.toString(),
         contractAddress: this.config.registryAddress,
         explorerUrl: `${this.config.explorerUrl.replace(/\/$/, "")}/tx/${txHash}`,
+        receiptIndexing:
+          receiptBlockNumber === explorerTx.blockNumber
+            ? "eth_getTransactionReceipt"
+            : "explorer-api-and-rpc-state",
       },
       simulated: false,
       disclosure:
-        "Injective EVM testnet receipt. The transaction proves commitment of the event hash, not the sporting fact by itself.",
+        "Injective EVM testnet commitment confirmed by latest registry state plus the canonical RPC block and official Explorer transaction API. The chain proves commitment, not the sporting fact by itself.",
     };
   }
 
   async verify(input: {
     matchId: string;
     eventHash: Hex;
+    evidenceRoot: Hex;
     verificationConfidenceBps: number;
     anchorConfidenceBps: number;
     observedAt: string;
@@ -324,7 +727,20 @@ export class InjectiveAnchorService implements AnchorService {
       Math.floor(new Date(input.observedAt).getTime() / 1_000),
     );
     const expectedExplorerUrl = `${this.config.explorerUrl.replace(/\/$/, "")}/tx/${input.txHash}`;
-    const [code, registryId, latest, receipt, transaction, checkedAtBlock] =
+    const indexedTransaction = await explorerTransaction(
+      this.config.explorerApiUrl,
+      input.txHash,
+    );
+    if (!indexedTransaction) {
+      return {
+        checked: false,
+        valid: false,
+        mode: "injective-testnet",
+        reason:
+          "The official Injective Explorer API has not indexed the claimed transaction yet; no on-chain validity claim was made.",
+      };
+    }
+    const [code, registryId, latest, canonicalBlock, checkedAtBlock] =
       await Promise.all([
         client.getCode({ address: this.config.registryAddress }),
         client.readContract({
@@ -335,11 +751,13 @@ export class InjectiveAnchorService implements AnchorService {
         client.readContract({
           address: this.config.registryAddress,
           abi: registryAbi,
-          functionName: "verifyProof",
+          functionName: "verifyLatestSettlementProof",
           args: [matchIdHash, input.eventHash],
         }),
-        client.getTransactionReceipt({ hash: input.txHash }),
-        client.getTransaction({ hash: input.txHash }),
+        client.getBlock({
+          blockNumber: indexedTransaction.blockNumber,
+          includeTransactions: true,
+        }),
         client.getBlockNumber(),
       ]);
     if (!code || code === "0x" || registryId !== EXPECTED_REGISTRY_ID) {
@@ -347,55 +765,64 @@ export class InjectiveAnchorService implements AnchorService {
         checked: true,
         valid: false,
         mode: "injective-testnet",
-        reason: "Configured address is not a Proofline MatchProofRegistry v1.",
+        reason: "Configured address is not a Proofline MatchProofRegistry v3.",
       };
     }
-    const receiptBlock = await client.getBlock({
-      blockNumber: receipt.blockNumber,
-    });
     const chainAnchoredAt = new Date(
-      Number(receiptBlock.timestamp) * 1_000,
+      Number(canonicalBlock.timestamp) * 1_000,
     ).toISOString();
 
     let callMatches = false;
     try {
       const decoded = decodeFunctionData({
         abi: registryAbi,
-        data: transaction.input,
+        data: indexedTransaction.input,
       });
-      if (decoded.functionName === "anchorProof") {
+      if (decoded.functionName === "appendRevision") {
         const [
           txMatchIdHash,
           txEventHash,
+          txEvidenceRoot,
           txConfidenceBps,
           txObservedAt,
+          txState,
         ] = decoded.args;
         callMatches =
           txMatchIdHash === matchIdHash &&
           txEventHash === input.eventHash &&
+          txEvidenceRoot === input.evidenceRoot &&
           txConfidenceBps === input.verificationConfidenceBps &&
-          txObservedAt === expectedObservedAt;
+          txObservedAt === expectedObservedAt &&
+          txState === 1;
       }
     } catch {
       callMatches = false;
     }
 
-    const [latestValid, latestState, latestConfidenceBps, revision, decisionHash] =
+    const [latestValid, latestState, latestConfidenceBps, revision, decisionHash, latestEvidenceRoot] =
       latest;
-    const receiptMatches =
-      receipt.status === "success" &&
-      receipt.to?.toLowerCase() === this.config.registryAddress.toLowerCase() &&
-      transaction.to?.toLowerCase() === this.config.registryAddress.toLowerCase();
+    const transactionInCanonicalBlock = blockContainsTransaction(
+      canonicalBlock.transactions,
+      input.txHash,
+    );
+    const transactionMatches =
+      indexedTransaction.status.toLowerCase() === "ok" &&
+      indexedTransaction.result.toLowerCase() === "success" &&
+      indexedTransaction.revertReason === null &&
+      indexedTransaction.to.toLowerCase() ===
+        this.config.registryAddress.toLowerCase() &&
+      transactionInCanonicalBlock;
     const receiptClaimsMatch =
       input.anchorConfidenceBps === input.verificationConfidenceBps &&
-      input.blockNumber === receipt.blockNumber.toString() &&
+      input.blockNumber === indexedTransaction.blockNumber.toString() &&
       input.anchoredAt === chainAnchoredAt &&
       input.explorerUrl === expectedExplorerUrl;
     const valid =
       latestValid &&
       (latestState === 1 || latestState === 3) &&
       latestConfidenceBps === input.verificationConfidenceBps &&
-      receiptMatches &&
+      latestEvidenceRoot === input.evidenceRoot &&
+      transactionMatches &&
       callMatches &&
       receiptClaimsMatch;
 
@@ -407,27 +834,38 @@ export class InjectiveAnchorService implements AnchorService {
       registryAddress: this.config.registryAddress,
       transactionHash: input.txHash,
       checkedAtBlock: checkedAtBlock.toString(),
+      receiptIndexing: "explorer-api-and-rpc-state",
       latest: {
         state: latestState,
         confidenceBps: latestConfidenceBps,
         revision: revision.toString(),
         decisionHash,
+        evidenceRoot: latestEvidenceRoot,
       },
       checks: {
         registryIdentity: true,
         latestEventHash: latestValid,
+        evidenceRoot: latestEvidenceRoot === input.evidenceRoot,
         confidence:
           latestConfidenceBps === input.verificationConfidenceBps &&
           input.anchorConfidenceBps === input.verificationConfidenceBps,
         observedAt: callMatches,
-        blockNumber: input.blockNumber === receipt.blockNumber.toString(),
+        blockNumber:
+          input.blockNumber === indexedTransaction.blockNumber.toString(),
         anchoredAt: input.anchoredAt === chainAnchoredAt,
         explorerUrl: input.explorerUrl === expectedExplorerUrl,
-        transactionTarget: receiptMatches,
+        transactionTarget:
+          indexedTransaction.to.toLowerCase() ===
+          this.config.registryAddress.toLowerCase(),
+        transactionStatus: indexedTransaction.status.toLowerCase() === "ok",
+        transactionResult:
+          indexedTransaction.result.toLowerCase() === "success" &&
+          indexedTransaction.revertReason === null,
+        transactionInCanonicalBlock,
         transactionCalldata: callMatches,
       },
       reason: valid
-        ? "Fresh Injective testnet registry state and the claimed anchor transaction both match this packet."
+        ? "Fresh latest registry state, official Explorer transaction data, and the canonical RPC block all match this packet."
         : "The latest registry state or claimed anchor transaction does not match this packet.",
     };
   }
@@ -445,6 +883,7 @@ export class InjectiveAnchorService implements AnchorService {
       publicRpcUrl: INJECTIVE_TESTNET_RPC_URL,
       registryAddress: this.config.registryAddress,
       explorerUrl: this.config.explorerUrl,
+      explorerApiUrl: this.config.explorerApiUrl,
       disclosure:
         "Real Injective EVM testnet anchoring is configured. Chain ID, registry code, anchorer role, gas balance, and transaction success are checked when an anchor is attempted.",
     };

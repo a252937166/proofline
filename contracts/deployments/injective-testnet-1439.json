@@ -1,0 +1,19 @@
+{
+  "chainId": 1439,
+  "network": "eip155:1439",
+  "contractName": "MatchProofRegistry",
+  "contractAddress": "0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1",
+  "deployer": "0x93aAF4195d3C348dDb11285Ed6D77321901b1d21",
+  "anchorer": "0x4595f5a3372F1ca653329140146081d309Ac2bf2",
+  "anchorerGrantTransactionHash": "0x58587a0d751248b714a6232cc75618762e02ff355aba00fa28d79216f252acb4",
+  "anchorerGrantBlockNumber": "133196503",
+  "anchorerGrantReceiptIndexing": "explorer-api-and-rpc-state",
+  "anchorerGrantExplorerUrl": "https://testnet.blockscout.injective.network/tx/0x58587a0d751248b714a6232cc75618762e02ff355aba00fa28d79216f252acb4",
+  "transactionHash": "0xdf71a0e7fce722bfdc39b58951f6548ef07b6d06cb101aa57bc51a5566979523",
+  "transactionExplorerUrl": "https://testnet.blockscout.injective.network/tx/0xdf71a0e7fce722bfdc39b58951f6548ef07b6d06cb101aa57bc51a5566979523",
+  "blockNumber": "133196495",
+  "receiptIndexing": "explorer-api-and-rpc-state",
+  "deployedCodeHash": "0xb0a638a47be17775add74f872bc024e3c4389bd1487d3fd01a021377828cf0d4",
+  "explorerUrl": "https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1",
+  "deployedAt": "2026-07-11T12:36:27.000000Z"
+}

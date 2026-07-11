@@ -30,10 +30,39 @@ Use `npm run testnet:preflight` after deployment and follow
 [`docs/TESTNET_RUNBOOK.md`](../docs/TESTNET_RUNBOOK.md) for the guarded anchor
 and official x402 Agent flow.
 
-`anchorDecision` includes an optimistic-concurrency check on the previous hash.
-`anchorProof` is the API convenience method: it appends a `Verified` revision and
-links the current latest hash automatically. Verified/final revisions require at
-least 8,200 bps confidence and reject observations more than five minutes in the
-future. `verifyProof` follows the latest revision for the requested event hash,
-so anchoring another event in the same match does not invalidate earlier proofs.
+Every write must carry `evidenceRoot`: the immutable evidence-envelope hash that
+excludes the later anchor receipt, transaction hash, and issuer signature. Empty
+commitments are rejected, and the value is included in the immutable decision
+hash and anchor event. The delivery packet is assembled after anchoring and its
+separate `packetHash` is issuer-signed and verified off-chain; it is deliberately
+not stored here, avoiding a circular packet-hash/transaction-hash dependency.
+
+`appendRevision` is the only write path. It requires the caller to provide the
+current `previousDecisionHash`, so every integration participates in optimistic
+concurrency and two writers cannot both win from the same prior revision. The
+older convenience writer was removed in Registry v3 because it silently read
+the latest revision and could bypass that boundary. Verified/final revisions
+require at least 8,200 bps evidence score and observations more than five minutes
+in the future are rejected. A `Final` decision is fully immutable: no later
+revision, including another `Final`, can replace it.
+
+There are deliberately two verification views:
+
+- `verifyHistoricalProof(matchIdHash, revision, eventHash)` verifies one explicit,
+  immutable revision for audit purposes. It makes no claim that the result is
+  still current.
+- `verifyLatestSettlementProof(matchIdHash, eventHash)` evaluates only the
+  match-wide latest revision. A correction, Disputed, or Rejected revision thus
+  invalidates every older result for settlement.
+
+`verifyProof` remains as a deprecated compatibility alias for
+`verifyLatestSettlementProof`; it no longer has the unsafe v1 per-event semantics.
 Ownership transfer is two-step and rotates the default admin roles on accept.
+
+## Behavior tests
+
+`npm run test:contract` deploys the compiled bytecode to a fresh in-process
+Hardhat EVM and tests superseded proofs, Disputed/Rejected invalidation, Final
+immutability, optimistic concurrency, pause/role rotation, historical vs
+latest queries, and commitment/confidence/time guards. The lightweight compile
+and ABI checks run alongside those deployment tests.

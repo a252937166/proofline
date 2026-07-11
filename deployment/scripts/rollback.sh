@@ -83,6 +83,7 @@ restore_on_error() {
   restore_link "${OLD_API}" /opt/proofline/current
   restore_link "${OLD_WEB}" /var/www/proofline/current
   systemctl restart proofline-api.service
+  systemctl restart proofline-mcp.service
   if systemctl is-active --quiet nginx; then
     systemctl reload nginx
   fi
@@ -108,6 +109,7 @@ done
 if [[ -z "${response}" ]]; then
   false
 fi
+systemctl restart proofline-mcp.service
 
 nginx -t
 if systemctl is-active --quiet nginx; then

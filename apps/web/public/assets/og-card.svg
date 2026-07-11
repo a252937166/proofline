@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Proofline — World Cup evidence control room</title>
+  <desc id="desc">Two independent source lanes converge on a verified match result.</desc>
+  <defs>
+    <pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse">
+      <path d="M42 0H0V42" fill="none" stroke="#153544" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="beam" x1="0" x2="1">
+      <stop stop-color="#35C4D8" stop-opacity="0"/>
+      <stop offset="1" stop-color="#35C4D8" stop-opacity=".18"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#071A2B"/>
+  <rect width="1200" height="630" fill="url(#grid)" opacity=".8"/>
+  <path fill="#0C2736" d="M0 0h1200v74H0zM0 558h1200v72H0z"/>
+  <path fill="url(#beam)" d="M595 74h605v484H595z"/>
+
+  <g transform="translate(56 21)">
+    <path fill="#071A2B" stroke="#45636D" d="M10 2h44l8 8v44l-8 8H10l-8-8V10z"/>
+    <path fill="none" stroke="#35C4D8" stroke-width="5" d="M12 21h17l13 11"/>
+    <path fill="none" stroke="#F6B73C" stroke-width="5" d="M12 43h17l13-11"/>
+    <path fill="#F4F7F2" d="m42 25 7 7-7 7-7-7z"/>
+  </g>
+  <text x="135" y="62" fill="#F4F7F2" font-family="Arial Narrow, Arial, sans-serif" font-size="30" font-weight="800" letter-spacing="3">PROOF—LINE</text>
+  <text x="1138" y="50" fill="#8CA3AA" font-family="monospace" font-size="13" text-anchor="end" letter-spacing="2">VARA / INJECTIVE TESTNET</text>
+
+  <g transform="translate(62 146)">
+    <text fill="#F6B73C" font-family="monospace" font-size="15" letter-spacing="2">WORLD CUP EVIDENCE CONTROL ROOM</text>
+    <text y="72" fill="#F4F7F2" font-family="Arial Narrow, Arial, sans-serif" font-size="70" font-weight="800" letter-spacing="-2">VERIFY THE RESULT.</text>
+    <text y="140" fill="#A7BDC2" font-family="Arial Narrow, Arial, sans-serif" font-size="62" font-weight="700" letter-spacing="-1">NOT THE REFRESH ICON.</text>
+    <text y="201" fill="#8CA3AA" font-family="Arial, sans-serif" font-size="19">Independent sources · deterministic policy · portable proof</text>
+  </g>
+
+  <g transform="translate(665 145)">
+    <rect width="469" height="332" fill="#0A2130" stroke="#31505D"/>
+    <text x="25" y="37" fill="#829AA0" font-family="monospace" font-size="12" letter-spacing="2">2026 DELAYED RESULT / NOT LIVE</text>
+    <text x="25" y="86" fill="#F4F7F2" font-family="Arial Narrow, Arial, sans-serif" font-size="29" font-weight="700">FRANCE</text>
+    <text x="444" y="86" fill="#F4F7F2" font-family="Arial Narrow, Arial, sans-serif" font-size="29" font-weight="700" text-anchor="end">MOROCCO</text>
+    <text x="215" y="101" fill="#F4F7F2" font-family="Arial Narrow, Arial, sans-serif" font-size="78" font-weight="800" text-anchor="end">2</text>
+    <text x="235" y="96" fill="#55727B" font-family="monospace" font-size="28" text-anchor="middle">:</text>
+    <text x="255" y="101" fill="#F4F7F2" font-family="Arial Narrow, Arial, sans-serif" font-size="78" font-weight="800">0</text>
+    <path d="M25 160h135l76 54" fill="none" stroke="#35C4D8" stroke-width="7"/>
+    <path d="M25 270h135l76-56" fill="none" stroke="#F6B73C" stroke-width="7"/>
+    <text x="25" y="148" fill="#35C4D8" font-family="monospace" font-size="13">ESPN / GROUP 01</text>
+    <text x="25" y="298" fill="#F6B73C" font-family="monospace" font-size="13">FIFA / GROUP 02</text>
+    <path fill="#F4F7F2" d="m236 195 19 19-19 19-19-19z"/>
+    <text x="281" y="208" fill="#F4F7F2" font-family="Arial Narrow, Arial, sans-serif" font-size="20" font-weight="700">RESULTS MATCH</text>
+    <text x="281" y="233" fill="#8CA3AA" font-family="monospace" font-size="12">2 INDEPENDENT GROUPS</text>
+  </g>
+
+  <text x="62" y="603" fill="#A6BABF" font-family="monospace" font-size="14" letter-spacing="1.5">proofline.axiqo.xyz</text>
+  <text x="1138" y="603" fill="#35C4D8" font-family="monospace" font-size="14" text-anchor="end">DON’T TRUST THE SCORE. RE-RUN THE PROOF.</text>
+</svg>

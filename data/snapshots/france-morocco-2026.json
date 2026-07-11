@@ -1,0 +1,86 @@
+{
+  "match": {
+    "id": "WC-2026-M97-FRA-MAR",
+    "competition": "FIFA World Cup 2026",
+    "season": 2026,
+    "label": "France vs Morocco",
+    "homeTeam": "France",
+    "awayTeam": "Morocco",
+    "venue": "Boston Stadium (Gillette Stadium)",
+    "status": "finished",
+    "score": { "home": 2, "away": 0 },
+    "scheduledDate": "2026-07-09",
+    "scheduledAt": "2026-07-09T20:00:00.000Z",
+    "dataMode": "delayed",
+    "captureMethod": "delayed-snapshot",
+    "capturedAt": "2026-07-11T10:38:05.000Z",
+    "supersededBy": null,
+    "disclosure": "Delayed snapshot · captured after full time · not a live feed"
+  },
+  "eventId": "final-result",
+  "observations": [
+    {
+      "id": "obs-2026-m97-result-espn",
+      "eventId": "final-result",
+      "source": {
+        "id": "espn-scoreboard",
+        "label": "ESPN public scoreboard JSON",
+        "url": "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260709",
+        "tier": "licensed",
+        "reliabilityBps": 9200,
+        "independenceGroup": "espn"
+      },
+      "receivedAt": "2026-07-11T10:38:05.000Z",
+      "payload": {
+        "matchId": "WC-2026-M97-FRA-MAR",
+        "eventType": "match_end",
+        "minute": 90,
+        "period": "full-time",
+        "score": { "home": 2, "away": 0 },
+        "occurredAt": "2026-07-09T22:00:00.000Z"
+      },
+      "sourceSnapshot": {
+        "eventId": "760510",
+        "name": "Morocco at France",
+        "date": "2026-07-09T20:00Z",
+        "status": {
+          "name": "STATUS_FULL_TIME",
+          "state": "post",
+          "completed": true,
+          "description": "Full Time"
+        },
+        "competitors": [
+          { "homeAway": "home", "score": "2", "team": "France" },
+          { "homeAway": "away", "score": "0", "team": "Morocco" }
+        ]
+      }
+    },
+    {
+      "id": "obs-2026-m97-result-fifa",
+      "eventId": "final-result",
+      "source": {
+        "id": "fifa-world-cup-match-schedule",
+        "label": "FIFA official fixtures and results",
+        "url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/match-schedule-fixtures-results-teams-stadiums",
+        "tier": "official",
+        "reliabilityBps": 9800,
+        "independenceGroup": "fifa"
+      },
+      "receivedAt": "2026-07-11T10:38:05.000Z",
+      "payload": {
+        "matchId": "WC-2026-M97-FRA-MAR",
+        "eventType": "match_end",
+        "minute": 90,
+        "period": "full-time",
+        "score": { "home": 2, "away": 0 },
+        "occurredAt": "2026-07-09T22:00:00.000Z"
+      },
+      "sourceSnapshot": {
+        "section": "FIFA World Cup 2026 quarter-final fixtures and results",
+        "date": "Thursday, 9 July 2026",
+        "result": "Match 97 – France 2-0 Morocco - Boston Stadium",
+        "kickoffLocal": "16:00"
+      }
+    }
+  ]
+}

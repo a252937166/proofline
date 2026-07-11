@@ -18,13 +18,13 @@ import {
   INJECTIVE_TESTNET_CHAIN_ID,
   INJECTIVE_TESTNET_NETWORK,
   INJECTIVE_TESTNET_USDC,
+  PROOFLINE_REGISTRY_ID,
   X402_PRICE_ATOMIC,
 } from "./lib/testnet-workflow.js";
 
 const DEFAULT_RPC = "https://k8s.testnet.json-rpc.injective.network/";
-const EXPECTED_REGISTRY_ID = keccak256(
-  stringToHex("proofline.match-proof-registry.v1"),
-);
+const DEFAULT_EXPLORER_API =
+  "https://testnet.blockscout-api.injective.network/api";
 const registryAbi = [
   {
     type: "function",
@@ -39,6 +39,41 @@ const registryAbi = [
     stateMutability: "view",
     inputs: [{ name: "", type: "address" }],
     outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "verifyLatestSettlementProof",
+    stateMutability: "view",
+    inputs: [
+      { name: "matchIdHash", type: "bytes32" },
+      { name: "eventHash", type: "bytes32" },
+    ],
+    outputs: [
+      { name: "valid", type: "bool" },
+      { name: "state", type: "uint8" },
+      { name: "confidenceBps", type: "uint16" },
+      { name: "revision", type: "uint64" },
+      { name: "decisionHash", type: "bytes32" },
+      { name: "evidenceRoot", type: "bytes32" },
+    ],
+  },
+  {
+    type: "function",
+    name: "appendRevision",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "matchIdHash", type: "bytes32" },
+      { name: "eventHash", type: "bytes32" },
+      { name: "evidenceRoot", type: "bytes32" },
+      { name: "confidenceBps", type: "uint16" },
+      { name: "observedAt", type: "uint64" },
+      { name: "state", type: "uint8" },
+      { name: "expectedPreviousDecisionHash", type: "bytes32" },
+    ],
+    outputs: [
+      { name: "revision", type: "uint64" },
+      { name: "decisionHash", type: "bytes32" },
+    ],
   },
 ] as const;
 const erc20Abi = [
@@ -71,6 +106,22 @@ function assertInvariant(name: string, actual: string | undefined, expected: str
   if (actual?.trim() && actual.trim().toLowerCase() !== expected.toLowerCase()) {
     throw new Error(`${name} must remain ${expected}`);
   }
+}
+
+function publicExplorerApi(value: string | undefined): string {
+  const url = new URL(value?.trim() || DEFAULT_EXPLORER_API);
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error(
+      "PUBLIC_INJECTIVE_EXPLORER_API_URL must be a credential-free HTTPS base URL",
+    );
+  }
+  return url.toString().replace(/\/$/, "");
 }
 
 const [envMetadata, gitignore] = await Promise.all([
@@ -112,6 +163,9 @@ if (registryValue && !isAddress(registryValue)) {
 const registry = registryValue ? getAddress(registryValue) : undefined;
 const payTo = address("X402_PAY_TO");
 const allowedPayee = address("PROOFLINE_ALLOWED_PAYEE", payTo);
+const explorerApiUrl = publicExplorerApi(
+  process.env.PUBLIC_INJECTIVE_EXPLORER_API_URL,
+);
 
 if (payTo !== facilitator || allowedPayee !== facilitator) {
   throw new Error(
@@ -138,22 +192,56 @@ if (actualChainId !== INJECTIVE_TESTNET_CHAIN_ID) {
   );
 }
 
-const registryChecks = registry
-  ? await Promise.all([
-      client.getCode({ address: registry }),
-      client.readContract({
-        address: registry,
-        abi: registryAbi,
-        functionName: "REGISTRY_ID",
-      }),
-      client.readContract({
-        address: registry,
-        abi: registryAbi,
-        functionName: "anchorers",
-        args: [anchorer],
-      }),
-    ])
-  : undefined;
+let registryCode: Hex | undefined;
+let registryIdentity: Hex | undefined;
+let hasAnchorerRole = false;
+let registryV3AbiMatched = false;
+let registryProbeEvidenceRoot: Hex | undefined;
+let registryReadError: string | undefined;
+if (registry) {
+  registryCode = await client.getCode({ address: registry });
+  if (registryCode && registryCode !== "0x") {
+    try {
+      const probeMatchIdHash = keccak256(
+        stringToHex("PROOFLINE:REGISTRY-V3:PREFLIGHT"),
+      );
+      const probeEventHash = keccak256(
+        stringToHex("PROOFLINE:REGISTRY-V3:PROBE-EVENT"),
+      );
+      const [identity, anchorerRole, settlementProbe] = await Promise.all([
+        client.readContract({
+          address: registry,
+          abi: registryAbi,
+          functionName: "REGISTRY_ID",
+        }),
+        client.readContract({
+          address: registry,
+          abi: registryAbi,
+          functionName: "anchorers",
+          args: [anchorer],
+        }),
+        client.readContract({
+          address: registry,
+          abi: registryAbi,
+          functionName: "verifyLatestSettlementProof",
+          args: [probeMatchIdHash, probeEventHash],
+        }),
+      ]);
+      registryIdentity = identity;
+      hasAnchorerRole = anchorerRole;
+      // A successful six-field decode, including the evidenceRoot bytes32,
+      // proves the deployed view surface is Registry v3. The probe is an
+      // eth_call only and cannot create a revision.
+      registryProbeEvidenceRoot = settlementProbe[5];
+      registryV3AbiMatched = /^0x[0-9a-fA-F]{64}$/.test(
+        registryProbeEvidenceRoot,
+      );
+    } catch (error) {
+      registryReadError =
+        error instanceof Error ? error.message : String(error);
+    }
+  }
+}
 const [deployerGas, anchorGas, facilitatorGas, payerUsdc] = await Promise.all([
   client.getBalance({ address: deployer }),
   client.getBalance({ address: anchorer }),
@@ -166,15 +254,13 @@ const [deployerGas, anchorGas, facilitatorGas, payerUsdc] = await Promise.all([
   }),
 ]);
 
-const registryCodePresent = Boolean(
-  registryChecks?.[0] && registryChecks[0] !== "0x",
-);
-const registryIdentityMatched = registryChecks?.[1] === EXPECTED_REGISTRY_ID;
-const hasAnchorerRole = registryChecks?.[2] === true;
+const registryCodePresent = Boolean(registryCode && registryCode !== "0x");
+const registryIdentityMatched = registryIdentity === PROOFLINE_REGISTRY_ID;
 const registryReady =
   Boolean(registry) &&
   registryCodePresent &&
   registryIdentityMatched &&
+  registryV3AbiMatched &&
   hasAnchorerRole;
 
 const deployReady = deployerGas > 0n;
@@ -184,7 +270,7 @@ const warnings = [
   ...(registry
     ? registryReady
       ? []
-      : ["The configured registry code, identity, or anchorer role is not ready."]
+      : ["The configured registry code, v3 identity/ABI, or anchorer role is not ready."]
     : ["No registry is configured; deploy:contract has not completed and persisted its address."]),
   ...(deployReady
     ? []
@@ -210,6 +296,14 @@ process.stdout.write(
       schema: "proofline.testnet-preflight.v1",
       ok: overallReady,
       network: INJECTIVE_TESTNET_NETWORK,
+      independentExplorerApi: {
+        url: explorerApiUrl,
+        configured:
+          Boolean(process.env.PUBLIC_INJECTIVE_EXPLORER_API_URL?.trim()),
+        purpose:
+          "Independent transaction-input and receipt-indexing fallback; RPC remains authoritative for latest registry state.",
+        transactionsSubmitted: 0,
+      },
       transactionsSubmitted: 0,
       secretMaterialPrinted: false,
       dotenv: { ignored: true, permissions: envPermissions.toString(8) },
@@ -221,7 +315,14 @@ process.stdout.write(
       registry: {
         address: registry ?? null,
         codePresent: registryCodePresent,
+        expectedRegistryId: PROOFLINE_REGISTRY_ID,
         identityMatched: registryIdentityMatched,
+        v3AbiMatched: registryV3AbiMatched,
+        settlementWrite: "appendRevision",
+        appendRevisionArgumentCount: 7,
+        latestSettlementProbeEvidenceRoot:
+          registryProbeEvidenceRoot ?? null,
+        readError: registryReadError ?? null,
         anchorer,
         anchorerRole: hasAnchorerRole,
         anchorerGasAvailable: anchorGas > 0n,

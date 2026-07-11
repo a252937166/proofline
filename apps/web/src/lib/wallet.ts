@@ -28,6 +28,7 @@ export interface X402Requirement {
 export interface BrowserPayment {
   header: string;
   account: string;
+  nonce: string;
   requirement: X402Requirement;
 }
 
@@ -215,6 +216,7 @@ export async function createBrowserPaymentSignature(options: {
 
   return {
     account,
+    nonce: authorization.nonce,
     requirement,
     header: encodeBase64({
       x402Version: 2,

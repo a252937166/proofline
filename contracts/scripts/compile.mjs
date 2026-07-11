@@ -28,6 +28,7 @@ const input = {
   },
   settings: {
     optimizer: { enabled: true, runs: 200 },
+    viaIR: true,
     evmVersion: "paris",
     outputSelection: {
       "*": {

@@ -71,6 +71,70 @@ describe("root environment loading", () => {
     );
   });
 
+  it("requires a protected receipt router for the production inline facilitator", () => {
+    const privateKey = generatePrivateKey();
+    const payTo = "0x1111111111111111111111111111111111111111";
+    expect(
+      readRuntimeConfig({
+        NODE_ENV: "production",
+        X402_MODE: "live",
+        X402_PAY_TO: payTo,
+        X402_FACILITATOR_PRIVATE_KEY: privateKey,
+      }).x402,
+    ).toMatchObject({ mode: "live", configured: false });
+    expect(
+      readRuntimeConfig({
+        NODE_ENV: "production",
+        X402_MODE: "live",
+        X402_PAY_TO: payTo,
+        X402_FACILITATOR_PRIVATE_KEY: privateKey,
+        X402_RPC_PROXY_TOKEN: "a".repeat(32),
+      }).x402,
+    ).toMatchObject({ mode: "live", configured: false });
+    expect(
+      readRuntimeConfig({
+        NODE_ENV: "production",
+        PORT: "4035",
+        X402_MODE: "live",
+        X402_PAY_TO: payTo,
+        X402_FACILITATOR_PRIVATE_KEY: privateKey,
+        X402_RPC_PROXY_TOKEN: "a".repeat(32),
+        PROOFLINE_PROOF_ENTITLEMENT_FILE:
+          "/tmp/proofline/proof-entitlements.json",
+      }).x402,
+    ).toMatchObject({
+      mode: "live",
+      configured: true,
+      entitlementFile: "/tmp/proofline/proof-entitlements.json",
+      facilitatorRpcUrl: `http://127.0.0.1:4035/api/internal/evm-rpc/${"a".repeat(32)}`,
+    });
+  });
+
+  it("keeps the legacy payment ledger separate from proof entitlements", () => {
+    expect(
+      readRuntimeConfig({
+        X402_MODE: "live",
+        PROOFLINE_X402_LEDGER_FILE: "/tmp/proofline/x402-ledger.json",
+        PROOFLINE_PROOF_ENTITLEMENT_FILE:
+          "/tmp/proofline/proof-entitlements.json",
+      }).x402,
+    ).toMatchObject({
+      mode: "live",
+      ledgerFile: "/tmp/proofline/x402-ledger.json",
+      entitlementFile: "/tmp/proofline/proof-entitlements.json",
+    });
+    expect(() =>
+      readRuntimeConfig({
+        PROOFLINE_X402_LEDGER_FILE: `bad\0path`,
+      }),
+    ).toThrow("PROOFLINE_X402_LEDGER_FILE");
+    expect(() =>
+      readRuntimeConfig({
+        PROOFLINE_PROOF_ENTITLEMENT_FILE: `bad\0path`,
+      }),
+    ).toThrow("PROOFLINE_PROOF_ENTITLEMENT_FILE");
+  });
+
   it("requires HTTPS for remote trust endpoints and HTTP(S) on loopback", () => {
     expect(() =>
       readRuntimeConfig({ INJECTIVE_TESTNET_RPC: "http://rpc.example" }),
@@ -99,6 +163,12 @@ describe("root environment loading", () => {
     ).toThrow("browser-visible");
     expect(() =>
       readRuntimeConfig({ PUBLIC_API_URL: "https://api.example/v1?key=secret" }),
+    ).toThrow("browser-visible");
+    expect(() =>
+      readRuntimeConfig({
+        PUBLIC_INJECTIVE_EXPLORER_API_URL:
+          "https://explorer-api.example/api?key=secret",
+      }),
     ).toThrow("browser-visible");
   });
 });

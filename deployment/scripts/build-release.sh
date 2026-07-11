@@ -66,11 +66,17 @@ if [[ ! "${NODE_MAJOR}" =~ ^[0-9]+$ ]] || (( NODE_MAJOR < 20 )); then
   exit 1
 fi
 
-if [[ -z "${RELEASE_ID}" ]]; then
-  SOURCE_REVISION=nogit
-  if command -v git >/dev/null 2>&1 && git -C "${REPOSITORY_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    SOURCE_REVISION=$(git -C "${REPOSITORY_ROOT}" rev-parse --short=12 HEAD)
+SOURCE_COMMIT=nogit
+SOURCE_REVISION=nogit
+if command -v git >/dev/null 2>&1 && git -C "${REPOSITORY_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  SOURCE_COMMIT=$(git -C "${REPOSITORY_ROOT}" rev-parse HEAD)
+  SOURCE_REVISION=$(git -C "${REPOSITORY_ROOT}" rev-parse --short=12 HEAD)
+  if [[ "${ALLOW_DIRTY_BUILD:-0}" != "1" ]] && [[ -n "$(git -C "${REPOSITORY_ROOT}" status --porcelain --untracked-files=normal)" ]]; then
+    printf 'Refusing to create an immutable release from a dirty worktree; commit first or set ALLOW_DIRTY_BUILD=1 for a non-final rehearsal.\n' >&2
+    exit 1
   fi
+fi
+if [[ -z "${RELEASE_ID}" ]]; then
   RELEASE_ID="$(date -u +%Y%m%dT%H%M%SZ)-${SOURCE_REVISION}"
 fi
 if [[ ! "${RELEASE_ID}" =~ ^[A-Za-z0-9._-]{1,80}$ ]]; then
@@ -97,23 +103,52 @@ trap cleanup EXIT INT TERM
 
 API_STAGE="${TEMP_ROOT}/api"
 WEB_STAGE="${TEMP_ROOT}/web"
-mkdir -p "${API_STAGE}/apps/api" "${API_STAGE}/packages/core" "${API_STAGE}/data/replays" "${WEB_STAGE}"
+mkdir -p \
+  "${API_STAGE}/apps/api" \
+  "${API_STAGE}/packages/core" \
+  "${API_STAGE}/packages/mcp" \
+  "${API_STAGE}/data" \
+  "${WEB_STAGE}"
 
 cd "${REPOSITORY_ROOT}"
 npm run build -w @proofline/core
 npm run build -w @proofline/api
-VITE_API_BASE=/api npm run build -w @proofline/web
+npm run build -w @proofline/mcp
+VITE_API_BASE=/api \
+VITE_BUILD_COMMIT="${SOURCE_COMMIT}" \
+VITE_RELEASE_ID="${RELEASE_ID}" \
+  npm run build -w @proofline/web
 
 cp -a apps/api/dist "${API_STAGE}/apps/api/dist"
 cp -a packages/core/dist "${API_STAGE}/packages/core/dist"
 cp packages/core/package.json "${API_STAGE}/packages/core/package.json"
-cp data/replays/wales-iran-2022.json "${API_STAGE}/data/replays/wales-iran-2022.json"
+cp -a packages/mcp/dist "${API_STAGE}/packages/mcp/dist"
+for dataset_directory in replays schedules snapshots evidence; do
+  source_directory="data/${dataset_directory}"
+  target_directory="${API_STAGE}/data/${dataset_directory}"
+  if [[ ! -d "${source_directory}" ]] || ! find "${source_directory}" -type f -name '*.json' -print -quit | grep -q .; then
+    printf 'Required dataset directory has no JSON files: %s\n' "${source_directory}" >&2
+    exit 1
+  fi
+  if find "${source_directory}" -type l -print -quit | grep -q .; then
+    printf 'Dataset directories may not contain symlinks: %s\n' "${source_directory}" >&2
+    exit 1
+  fi
+  if find "${source_directory}" -type f ! -name '*.json' -print -quit | grep -q .; then
+    printf 'Dataset directories may contain JSON files only: %s\n' "${source_directory}" >&2
+    exit 1
+  fi
+  mkdir -p "${target_directory}"
+  cp -a "${source_directory}/." "${target_directory}/"
+done
 cp "${DEPLOYMENT_DIR}/runtime/package.json" "${API_STAGE}/package.json"
 cp -a apps/web/dist/. "${WEB_STAGE}/"
 printf '%s\n' "${RELEASE_ID}" > "${API_STAGE}/RELEASE"
 printf '%s\n' "${RELEASE_ID}" > "${WEB_STAGE}/RELEASE"
-printf 'runtime_mode=%s\nnode=%s\nbuilt_at=%s\n' \
-  "${RUNTIME_MODE}" "$(node --version)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+printf '{"schema":"proofline.release.v1","releaseId":"%s","sourceCommit":"%s"}\n' \
+  "${RELEASE_ID}" "${SOURCE_COMMIT}" > "${WEB_STAGE}/release.json"
+printf 'runtime_mode=%s\nnode=%s\nbuilt_at=%s\nsource_commit=%s\n' \
+  "${RUNTIME_MODE}" "$(node --version)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${SOURCE_COMMIT}" \
   > "${API_STAGE}/BUILD_INFO"
 
 if [[ "${RUNTIME_MODE}" == bundled ]]; then

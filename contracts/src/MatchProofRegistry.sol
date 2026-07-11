@@ -17,6 +17,7 @@ contract MatchProofRegistry {
     struct Decision {
         bytes32 matchIdHash;
         bytes32 eventHash;
+        bytes32 evidenceRoot;
         bytes32 previousDecisionHash;
         bytes32 decisionHash;
         uint64 revision;
@@ -30,7 +31,7 @@ contract MatchProofRegistry {
     uint16 public constant MAX_CONFIDENCE_BPS = 10_000;
     uint16 public constant MIN_VERIFIED_CONFIDENCE_BPS = 8_200;
     uint64 public constant MAX_FUTURE_OBSERVATION_DRIFT = 5 minutes;
-    bytes32 public constant REGISTRY_ID = keccak256("proofline.match-proof-registry.v1");
+    bytes32 public constant REGISTRY_ID = keccak256("proofline.match-proof-registry.v3");
 
     address public owner;
     address public pendingOwner;
@@ -39,12 +40,12 @@ contract MatchProofRegistry {
     mapping(address => bool) public anchorers;
     mapping(address => bool) public pausers;
     mapping(bytes32 => Decision[]) private decisions;
-    mapping(bytes32 => mapping(bytes32 => uint64)) private latestRevisionByEvent;
 
     error Unauthorized();
     error ZeroAddress();
     error EmptyMatchIdHash();
     error EmptyEventHash();
+    error EmptyEvidenceRoot();
     error InvalidConfidence(uint16 confidenceBps);
     error VerifiedConfidenceTooLow(uint16 confidenceBps);
     error InvalidObservedAt();
@@ -53,6 +54,7 @@ contract MatchProofRegistry {
     error ContractNotPaused();
     error DecisionNotFound(bytes32 matchIdHash, uint64 revision);
     error PreviousDecisionHashMismatch(bytes32 expected, bytes32 actual);
+    error FinalDecisionImmutable(bytes32 decisionHash);
     error AlreadyOwner();
 
     event OwnershipTransferStarted(address indexed currentOwner, address indexed pendingOwner);
@@ -65,6 +67,7 @@ contract MatchProofRegistry {
         bytes32 indexed matchIdHash,
         bytes32 indexed eventHash,
         uint64 indexed revision,
+        bytes32 evidenceRoot,
         bytes32 decisionHash,
         bytes32 previousDecisionHash,
         uint16 confidenceBps,
@@ -155,9 +158,10 @@ contract MatchProofRegistry {
 
     /// @notice Append a stateful decision while guarding against concurrent writers.
     /// @param expectedPreviousDecisionHash The current latest hash, or zero for the first revision.
-    function anchorDecision(
+    function appendRevision(
         bytes32 matchIdHash,
         bytes32 eventHash,
+        bytes32 evidenceRoot,
         uint16 confidenceBps,
         uint64 observedAt,
         ProofState state,
@@ -168,24 +172,14 @@ contract MatchProofRegistry {
             revert PreviousDecisionHashMismatch(expectedPreviousDecisionHash, actualPreviousDecisionHash);
         }
 
-        return _append(matchIdHash, eventHash, confidenceBps, observedAt, state, actualPreviousDecisionHash);
-    }
-
-    /// @notice Convenience entry point used by the Proofline API.
-    /// @dev Appends a Verified revision and automatically links it to the latest revision.
-    function anchorProof(
-        bytes32 matchIdHash,
-        bytes32 eventHash,
-        uint16 confidenceBps,
-        uint64 observedAt
-    ) external onlyAnchorer whenNotPaused returns (uint64 revision, bytes32 decisionHash) {
         return _append(
             matchIdHash,
             eventHash,
+            evidenceRoot,
             confidenceBps,
             observedAt,
-            ProofState.Verified,
-            _latestDecisionHash(matchIdHash)
+            state,
+            actualPreviousDecisionHash
         );
     }
 
@@ -208,8 +202,55 @@ contract MatchProofRegistry {
         return decisions[matchIdHash][revision - 1];
     }
 
-    /// @notice Check the latest revision for this specific event hash.
-    /// @return valid True only for matching Verified or Final decisions.
+    /// @notice Verify an immutable historical revision without claiming it is current.
+    /// @dev Historical validity only describes that revision. Settlement callers MUST
+    ///      use verifyLatestSettlementProof so a later dispute or correction wins.
+    function verifyHistoricalProof(
+        bytes32 matchIdHash,
+        uint64 revision,
+        bytes32 eventHash
+    ) external view returns (
+        bool valid,
+        ProofState state,
+        uint16 confidenceBps,
+        uint64 checkedRevision,
+        bytes32 decisionHash,
+        bytes32 evidenceRoot
+    ) {
+        uint256 count = decisions[matchIdHash].length;
+        if (revision == 0 || revision > count) {
+            return (
+                false,
+                ProofState.Provisional,
+                0,
+                revision,
+                bytes32(0),
+                bytes32(0)
+            );
+        }
+        return _verifyDecision(decisions[matchIdHash][revision - 1], eventHash);
+    }
+
+    /// @notice Verify only the match-wide latest revision for settlement.
+    /// @dev Any later correction, Disputed, or Rejected revision invalidates an older result.
+    function verifyLatestSettlementProof(
+        bytes32 matchIdHash,
+        bytes32 eventHash
+    ) external view returns (
+        bool valid,
+        ProofState state,
+        uint16 confidenceBps,
+        uint64 revision,
+        bytes32 decisionHash,
+        bytes32 evidenceRoot
+    ) {
+        return _verifyLatestSettlement(matchIdHash, eventHash);
+    }
+
+    /// @notice Backwards-compatible settlement verifier.
+    /// @dev This alias intentionally follows the match-wide latest revision, fixing
+    ///      the v1 stale-event behavior. New integrations should use the explicit name.
+    /// @custom:deprecated Use verifyLatestSettlementProof to also read evidence commitments.
     function verifyProof(
         bytes32 matchIdHash,
         bytes32 eventHash
@@ -220,20 +261,15 @@ contract MatchProofRegistry {
         uint64 revision,
         bytes32 decisionHash
     ) {
-        revision = latestRevisionByEvent[matchIdHash][eventHash];
-        if (revision == 0) return (false, ProofState.Provisional, 0, 0, bytes32(0));
-
-        Decision storage decision = decisions[matchIdHash][revision - 1];
-        bool usableState = decision.state == ProofState.Verified || decision.state == ProofState.Final;
-        valid = decision.eventHash == eventHash && usableState &&
-            decision.confidenceBps >= MIN_VERIFIED_CONFIDENCE_BPS;
-        return (
+        bytes32 ignoredEvidenceRoot;
+        (
             valid,
-            decision.state,
-            decision.confidenceBps,
+            state,
+            confidenceBps,
             revision,
-            decision.decisionHash
-        );
+            decisionHash,
+            ignoredEvidenceRoot
+        ) = _verifyLatestSettlement(matchIdHash, eventHash);
     }
 
     function _latestDecisionHash(bytes32 matchIdHash) private view returns (bytes32) {
@@ -244,6 +280,7 @@ contract MatchProofRegistry {
     function _append(
         bytes32 matchIdHash,
         bytes32 eventHash,
+        bytes32 evidenceRoot,
         uint16 confidenceBps,
         uint64 observedAt,
         ProofState state,
@@ -251,6 +288,7 @@ contract MatchProofRegistry {
     ) private returns (uint64 revision, bytes32 decisionHash) {
         if (matchIdHash == bytes32(0)) revert EmptyMatchIdHash();
         if (eventHash == bytes32(0)) revert EmptyEventHash();
+        if (evidenceRoot == bytes32(0)) revert EmptyEvidenceRoot();
         if (confidenceBps > MAX_CONFIDENCE_BPS) revert InvalidConfidence(confidenceBps);
         if (observedAt == 0) revert InvalidObservedAt();
         if (
@@ -262,7 +300,17 @@ contract MatchProofRegistry {
             revert ObservedAtInFuture(observedAt, maximumObservedAt);
         }
 
-        revision = uint64(decisions[matchIdHash].length + 1);
+        uint256 previousCount = decisions[matchIdHash].length;
+        if (
+            previousCount != 0 &&
+            decisions[matchIdHash][previousCount - 1].state == ProofState.Final
+        ) {
+            revert FinalDecisionImmutable(
+                decisions[matchIdHash][previousCount - 1].decisionHash
+            );
+        }
+
+        revision = uint64(previousCount + 1);
         uint64 anchoredAt = uint64(block.timestamp);
         decisionHash = keccak256(
             abi.encode(
@@ -270,6 +318,7 @@ contract MatchProofRegistry {
                 address(this),
                 matchIdHash,
                 eventHash,
+                evidenceRoot,
                 previousDecisionHash,
                 revision,
                 observedAt,
@@ -284,6 +333,7 @@ contract MatchProofRegistry {
             Decision({
                 matchIdHash: matchIdHash,
                 eventHash: eventHash,
+                evidenceRoot: evidenceRoot,
                 previousDecisionHash: previousDecisionHash,
                 decisionHash: decisionHash,
                 revision: revision,
@@ -294,12 +344,12 @@ contract MatchProofRegistry {
                 anchoredBy: msg.sender
             })
         );
-        latestRevisionByEvent[matchIdHash][eventHash] = revision;
 
         emit DecisionAnchored(
             matchIdHash,
             eventHash,
             revision,
+            evidenceRoot,
             decisionHash,
             previousDecisionHash,
             confidenceBps,
@@ -307,6 +357,55 @@ contract MatchProofRegistry {
             anchoredAt,
             state,
             msg.sender
+        );
+    }
+
+    function _verifyLatestSettlement(
+        bytes32 matchIdHash,
+        bytes32 eventHash
+    ) private view returns (
+        bool valid,
+        ProofState state,
+        uint16 confidenceBps,
+        uint64 revision,
+        bytes32 decisionHash,
+        bytes32 evidenceRoot
+    ) {
+        uint256 count = decisions[matchIdHash].length;
+        if (count == 0) {
+            return (
+                false,
+                ProofState.Provisional,
+                0,
+                0,
+                bytes32(0),
+                bytes32(0)
+            );
+        }
+        return _verifyDecision(decisions[matchIdHash][count - 1], eventHash);
+    }
+
+    function _verifyDecision(
+        Decision storage decision,
+        bytes32 eventHash
+    ) private view returns (
+        bool valid,
+        ProofState state,
+        uint16 confidenceBps,
+        uint64 revision,
+        bytes32 decisionHash,
+        bytes32 evidenceRoot
+    ) {
+        bool usableState = decision.state == ProofState.Verified || decision.state == ProofState.Final;
+        valid = decision.eventHash == eventHash && usableState &&
+            decision.confidenceBps >= MIN_VERIFIED_CONFIDENCE_BPS;
+        return (
+            valid,
+            decision.state,
+            decision.confidenceBps,
+            decision.revision,
+            decision.decisionHash,
+            decision.evidenceRoot
         );
     }
 }

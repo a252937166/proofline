@@ -1,52 +1,104 @@
 # Judge guide
 
-Proofline offers three evidence levels so a judge never has to wait for a live
-match or a wallet before understanding the differentiator.
+Proofline is designed to answer three questions before a sports product or AI
+Agent acts:
+
+1. What did each independent source report?
+2. Is the current event safe under a reproducible evidence policy?
+3. Can another machine verify the packet, its issuer, and the latest chain
+   commitment?
 
 ## 15 seconds — inspect the thesis
 
-1. Open the app.
-2. Read the permanent `Historical Replay · Not Live` label.
-3. Look at the settlement gate and Proofline confidence rail.
-4. Open the current source list and canonical event hash.
+Open [proofline.axiqo.xyz](https://proofline.axiqo.xyz). The first screen
+separates the result shown to a user from the proof required for automated
+settlement. Select a data mode and inspect its machine-readable disclosure:
 
-The app should already make the claim clear: reported events may be displayed,
-but machines cannot act until independent evidence crosses the public line.
+- **2026 delayed:** France 2–0 Morocco, with ESPN and FIFA provenance;
+- **2026 scheduled:** Norway–England and Argentina–Switzerland, with
+  `score=null` and no invented live state;
+- **2022 historical replay:** Wales 0–2 IR Iran, the deterministic conflict
+  demonstration.
 
-## 90 seconds — run the conflict replay
+## 90 seconds — run the judge demo
 
-1. Press **Run replay**.
-2. Watch the OpenFootball red-card observation appear.
-3. The injected provider-lag claim says yellow. VARA switches to `contested` and
-   the settlement gate stays held.
-4. FIFA corroborates red; the synthetic lag claim is explicitly retracted.
-5. The late goals and 0–2 final result arrive from both source families.
-6. The verified final-result hash is anchored in the configured demo or testnet
-   mode.
-7. Request the proof packet. The API first returns `402 Payment Required`; the
-   local no-wallet path is labelled sandbox and the testnet path uses native USDC.
-8. Run packet verification, then change one source field and verify that the
-   packet fails.
+1. On the default France–Morocco case, press **Verify this 2026 result**. Inspect
+   ESPN and FIFA as two separately hashed source lanes, the `98.25/100`
+   Evidence Score, and the recovered Registry v3 anchor.
+2. Open the x402 proof path, or open **Previously verified sample** without a
+   wallet. The published sample contains the full signed packet and links to
+   the real anchor and `0.01` test-USDC receipt.
+3. Press **Run conflict replay** to enter the deterministic control case.
+4. Press **Run the 90-second verification demo**.
+5. OpenFootball reports Wayne Hennessey's red card.
+6. The explicitly synthetic provider-lag observation reports yellow. Proofline
+   pauses on the exact `card` mismatch, marks the event `contested`, and holds
+   settlement.
+7. Press **Continue with provider correction**. FIFA corroborates red and the
+   bad claim is retracted without deleting history.
+8. Late goals and full-time status produce the final 0–2 event.
+9. Inspect the Evidence Score. It is a deterministic policy score, **not a
+   probability**. Only one representative from each independent source group
+   contributes weight; duplicating one provider cannot manufacture quorum.
+10. Press **Inspect x402 + chain proof** and verify all three layers:
+   packet integrity, EIP-712 trusted issuer, and match-wide latest on-chain
+   commitment.
+11. Run the tamper check. A one-field mutation must fail integrity verification.
 
-## 3–5 minutes — real testnet path
+The replay is permanently labelled **Historical Replay · Not Live**, and the
+injected yellow-card fault is permanently labelled synthetic.
 
-Configure `.env` with an Injective EVM testnet registry, an anchorer key, and
-distinct Agent/facilitator wallets. Then:
+## Public testnet evidence — no wallet required
 
-1. Anchor a new decision and open the Blockscout transaction.
-2. Call the proof resource with the Agent x402 client and pay `0.01` test USDC.
-3. Compare the x402 settlement transaction with the separate proof anchor.
-4. Show the plan-only Base Sepolia → Injective CCTP route and its mandatory
-   pre-burn approval. Do not claim a transfer unless executable burn,
-   attestation, mint, and balance-recheck work is added and real links exist.
+| Check | Blockscout evidence |
+| --- | --- |
+| Fully verified `MatchProofRegistry` v3 | [`0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1`](https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1?tab=contract) |
+| Contract deployment | [`0xdf71a0e7fce722bfdc39b58951f6548ef07b6d06cb101aa57bc51a5566979523`](https://testnet.blockscout.injective.network/tx/0xdf71a0e7fce722bfdc39b58951f6548ef07b6d06cb101aa57bc51a5566979523) |
+| Anchorer authorization | [`0x58587a0d751248b714a6232cc75618762e02ff355aba00fa28d79216f252acb4`](https://testnet.blockscout.injective.network/tx/0x58587a0d751248b714a6232cc75618762e02ff355aba00fa28d79216f252acb4) |
+| 2026 final-result anchor | [`0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344`](https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344) |
+| 2026 x402 `0.01` test-USDC settlement | [`0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e`](https://testnet.blockscout.injective.network/tx/0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e) |
 
-Never use the official Injective demo's transaction as Proofline-owned evidence.
+The anchored 2026 commitment is revision `1`, event hash
+`0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30`,
+evidence root
+`0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3`,
+and Evidence Score `98.25/100`. The full no-wallet packet is
+[machine-readable](../data/evidence/featured-proof.json).
 
-## Required commands
+## Agent and MCP evidence
+
+Proofline exposes ten domain MCP tools, including `get_match_events`,
+`assess_settlement_readiness`, `purchase_match_proof`,
+`verify_proof_packet`, and `verify_onchain_anchor`. The UI labels an Agent trace
+as actual only when MCP runtime logs are present; otherwise it explicitly says
+that the trace is illustrative.
+
+The repository includes a real stdio execution capture from the official
+Injective MCP pinned at commit
+`f5af39367975872a85b5447cefc9a197f2e635ea`. It listed 37 tools and successfully
+ran `address_normalize`, `usdc_native_info`, and `account_balances` on testnet.
+The balance call returned the payer's post-purchase `19.98` test USDC. Inspect the sanitized
+[MCP transcript](../evidence/agent/official-injective-mcp.json) or reproduce it
+with `npm run evidence:injective-mcp`.
+
+[Proofline's own MCP transcript](../evidence/agent/proofline-mcp-testnet.json)
+records five successful real tool calls. Its final
+`verify_onchain_anchor` call performed a fresh Injective EVM read and matched
+the registry's latest revision `1` and evidence root.
+
+## Important boundary
+
+CCTP is **future work**, not a completed feature. The design targets Base
+Sepolia domain `6` to Injective domain `29`, but Proofline claims no CCTP burn,
+attestation, mint, or balance-recheck transaction. Native Injective testnet USDC
+and the x402 payment above are real; no mainnet asset was used.
+
+## Local verification
 
 ```bash
 npm install
 npm run check
+npm run smoke
 npm run dev
 ```
 

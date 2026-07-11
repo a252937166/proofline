@@ -6,29 +6,33 @@ subtitles. Every scene retains a top-left chapter chip and top-right label:
 
 ## n1 · The referee for machine decisions
 
-**Picture:** branded title card, then the hosted control room at the pre-match
-state. Move the synthetic cursor to “Run replay”.
+**Picture:** branded title card, then the hosted control room on the default
+2026 France–Morocco result. Show the ESPN and FIFA source lanes, then select
+“Verify this 2026 result”.
 
 **Narration:**
 
 > A score is easy to read, but dangerous to settle. Proofline is a
 > conflict-aware evidence layer for World Cup products and AI agents. Its VARA
 > engine does not ask an AI model to guess what is true. It records attributed
-> observations, groups related providers, recomputes confidence, and allows
-> automation only when deterministic evidence rules pass. Today we will replay
-> Wales versus Iran and watch the system refuse a bad source in real time.
+> observations, groups related providers, recomputes an Evidence Score, and allows
+> automation only when deterministic evidence rules pass. This 2026 result is
+> independently sourced, anchored on Injective, and re-verifiable without
+> trusting the page that displays it.
 
 ## n2 · One bad feed must stop automation
 
-**Picture:** run the replay to frame 4. Hold on the red conflict rail, 56.7%
-confidence, exact `card` field mismatch, and Agent trace `HOLD` state.
+**Picture:** switch to the clearly labelled secondary 2022 conflict replay and
+run it to frame 4. Hold on the red conflict rail, 56.7/100 Evidence Score,
+exact `card` field mismatch, and Agent trace `HOLD` state.
 
 **Narration:**
 
 > OpenFootball reports Wayne Hennessey’s eighty-sixth-minute red card. A clearly
 > labelled synthetic lag feed then reports yellow. Even though one source still
 > has a strong reputation, an active material conflict overrides the score.
-> Confidence falls to fifty-six point seven percent, the settlement rail moves
+> The Evidence Score falls to fifty-six point seven out of one hundred. This is
+> a deterministic policy score, not a probability. The settlement rail moves
 > backward, and the Agent returns HOLD. Proofline preserves both claims and the
 > exact mismatched field. It never hides disagreement behind one opaque number.
 
@@ -44,28 +48,28 @@ settle a lie.”
 > This is why Injective is not a decorative blockchain button. Once independent
 > evidence agrees, Proofline canonicalizes the event with Unicode-stable JSON
 > and Keccak two-fifty-six. The append-only MatchProofRegistry commits the match,
-> event hash, confidence, observation time, and revision on Injective EVM
-> testnet. The contract enforces anchorer roles, minimum verified confidence,
-> future-time guards, pause controls, event-specific revisions, and two-step
+> event hash, evidence root, score, observation time, and revision on Injective
+> EVM testnet. The contract enforces anchorer roles, minimum verified score,
+> future-time guards, pause controls, match-wide revisions, and two-step
 > ownership transfer. The chain proves commitment and ordering; provenance and
 > reproducible verification establish evidence quality.
 
 ## n4 · Recovery, final result, and public proof
 
 **Picture:** resume replay. Show official corroboration, retraction, late goals,
-full time, 96.5%, then the real Blockscout transaction page. Replace the
-placeholder after deployment.
+full time, 96.49/100, then the fully verified registry and the real final-result
+anchor transaction in Blockscout.
 
 **Narration:**
 
 > The official source corroborates the red card and the faulty observation is
 > retracted without erasing history. The replay continues through both late
-> goals and full time. Two independent source families now agree, confidence
-> reaches ninety-six point five percent, and the final event hash is anchored.
+> goals and full time. Two independent source families now agree, the Evidence
+> Score reaches ninety-six point four nine, and the final evidence root is anchored.
 > This Blockscout page is the real Injective testnet transaction, not a generated
 > screenshot or simulated hash. A fresh verifier checks the registry identity,
-> transaction target, decoded calldata, block timestamp, event hash, and
-> confidence before accepting the receipt.
+> match-wide latest revision, event hash, evidence root, score, and state before
+> accepting the commitment.
 
 ## n5 · x402 evidence for humans and agents
 
@@ -91,17 +95,17 @@ and video-safe QR codes. Keep all content above y=905.
 
 **Narration:**
 
-> Proofline turns a live score into a decision that another machine can audit.
+> Proofline turns a reported score into a decision that another machine can audit.
 > The hosted replay works without a live match, while the public repository,
 > contract, transaction, and packet make every important claim inspectable. The
-> CCTP route is intentionally labelled plan-only in this build; we do not claim
+> CCTP route is explicitly future work; we do not claim
 > a burn or mint that did not happen. Proofline: do not trust the score. Re-run
 > the proof.
 
-## Evidence placeholders to replace before recording
+## Public evidence to show when recording
 
 - Hosted demo: `https://proofline.axiqo.xyz`
 - GitHub: `https://github.com/a252937166/proofline`
-- Contract: `{INJECTIVE_TESTNET_REGISTRY_URL}`
-- Anchor transaction: `{INJECTIVE_TESTNET_ANCHOR_TX_URL}`
-- x402 settlement: `{INJECTIVE_TESTNET_X402_TX_URL}`
+- Contract: `https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1?tab=contract`
+- 2026 anchor transaction: `https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344`
+- 2026 x402 settlement: `https://testnet.blockscout.injective.network/tx/0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e`
