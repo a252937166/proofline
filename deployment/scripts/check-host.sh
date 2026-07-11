@@ -13,6 +13,12 @@ fail() {
   failures=$((failures + 1))
 }
 
+if [[ -c /dev/null ]]; then
+  pass "/dev/null is a character device"
+else
+  fail "/dev/null is not a character device; systemd service namespaces will fail"
+fi
+
 if [[ -r /etc/centos-release ]]; then
   pass "OS: $(tr -d '\n' < /etc/centos-release)"
 elif [[ -r /etc/os-release ]]; then
