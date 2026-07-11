@@ -17,6 +17,12 @@ check_url() {
   printf 'PASS  %s %s\n' "${label}" "${url}"
 }
 
+if [[ ! -c /dev/null ]]; then
+  printf 'FAIL  /dev/null is not a character device\n' >&2
+  exit 1
+fi
+printf 'PASS  /dev/null is a character device\n'
+
 if command -v systemctl >/dev/null 2>&1; then
   systemctl is-active --quiet proofline-api.service
   printf 'PASS  systemd proofline-api.service is active\n'
