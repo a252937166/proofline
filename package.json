@@ -14,7 +14,7 @@
     "test": "npm run test -w @proofline/core && npm run test -w @proofline/api && npm run test -w @proofline/mcp && npm run test:contract && npm run test:workflow && npm run test:web && npm run test:fullstack",
     "test:contract": "vitest run contracts/test",
     "test:workflow": "vitest run scripts/test/testnet-workflow.test.ts",
-    "test:web": "npm run test:e2e -w @proofline/web",
+    "test:web": "npm run test:unit -w @proofline/web && npm run test:e2e -w @proofline/web",
     "test:fullstack": "npm run test:e2e:fullstack -w @proofline/web",
     "typecheck": "npm run typecheck -w @proofline/core && npm run typecheck -w @proofline/api && npm run typecheck -w @proofline/web && npm run typecheck -w @proofline/mcp && npm run typecheck:scripts",
     "typecheck:scripts": "tsc -p tsconfig.scripts.json --noEmit",

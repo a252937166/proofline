@@ -424,10 +424,21 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
         amount: "10000",
         payTo: integrations().x402.payTo,
         maxTimeoutSeconds: 300,
-        extra: { name: "USDC", version: "2" },
+        extra: { name: "USDC", version: "2", prooflineQuoteId: PACKET_HASH },
       };
       await fulfillJson(route, {
         accepts: [requirement],
+        extensions: {
+          proofline: {
+            packetHash: PACKET_HASH,
+            frozen: true,
+            purchaseBinding: {
+              required: true,
+              schema: "proofline.proof-purchase.v1",
+              primaryType: "ProofPurchase",
+            },
+          },
+        },
         ...(options.live ? {} : { demoSignature: "sandbox-payment-signature" }),
       }, 402);
       return;
@@ -480,7 +491,9 @@ test("guided replay pauses on the wrong field, corrects it, and keeps external c
   const continueCorrection = page.getByTestId("continue-correction");
   await expect(continueCorrection).toBeEnabled();
   await continueCorrection.click();
-  await expect(page.getByText("EVIDENCE COMPLETE")).toBeVisible();
+  // The full 15-frame rail intentionally renders every evidence state. On
+  // slower CI/browser hosts that can exceed the global 8s assertion window.
+  await expect(page.getByText("EVIDENCE COMPLETE")).toBeVisible({ timeout: 20_000 });
   await expect(page.getByText("External proof pending")).toBeVisible();
   await expect(page.getByText("x402 report").locator("..")) .toContainText("pending");
 });
@@ -496,6 +509,7 @@ test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, an
   await expect(requestProof).toBeVisible();
   await requestProof.click();
   await expect(page.getByText("402", { exact: true })).toBeVisible();
+  await expect(page.getByTestId("signature-sequence")).toContainText("2 signatures · 1 payment");
 
   await page.evaluate(() => {
     window.ethereum = {
@@ -569,10 +583,47 @@ test("wallet rejection is an error; post-signature network ambiguity is payment-
   await expect(page.getByTestId("payment-uncertain")).toContainText("memory only");
   await page.getByTestId("recover-existing-payment").click();
   await expect(page.getByText("Report delivered")).toBeVisible();
-  expect(await page.evaluate(() => (window as Window & { __prooflineSignCount?: number }).__prooflineSignCount)).toBe(1);
+  expect(await page.evaluate(() => (window as Window & { __prooflineSignCount?: number }).__prooflineSignCount)).toBe(2);
   expect(paymentHeaders).toHaveLength(2);
   expect(paymentHeaders[0]).toBe(paymentHeaders[1]);
+  const paymentEnvelope = JSON.parse(atob(paymentHeaders[0]!)) as {
+    extensions?: { proofline?: { packetHash?: string; purchaseBinding?: { schema?: string; message?: { packetHash?: string } } } };
+  };
+  expect(paymentEnvelope.extensions?.proofline?.packetHash).toBe(PACKET_HASH);
+  expect(paymentEnvelope.extensions?.proofline?.purchaseBinding?.schema).toBe("proofline.proof-purchase.v1");
+  expect(paymentEnvelope.extensions?.proofline?.purchaseBinding?.message?.packetHash).toBe(PACKET_HASH);
   expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => /payment|signature/i.test(key)))).toEqual([]);
+});
+
+test("rejecting the second ProofPurchase signature submits no payment authorization", async ({ page }) => {
+  const paymentHeaders: string[] = [];
+  await mockApi(page, { live: true, paymentHeaders });
+  await page.addInitScript(() => {
+    let signCount = 0;
+    window.ethereum = {
+      request: async ({ method }: { method: string }) => {
+        if (method === "eth_chainId") return "0x59f";
+        if (method === "eth_requestAccounts") return ["0x3333333333333333333333333333333333333333"];
+        if (method === "eth_signTypedData_v4") {
+          signCount += 1;
+          if (signCount === 2) {
+            throw Object.assign(new Error("User rejected ProofPurchase binding"), { code: 4001 });
+          }
+          return `0x${"66".repeat(65)}`;
+        }
+        return null;
+      },
+    };
+  });
+  await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
+  await page.getByTestId("open-proof-drawer").click();
+  await page.getByTestId("request-proof-report").click();
+  await page.getByTestId("submit-proof-payment").click();
+
+  await expect(page.getByText(/User rejected ProofPurchase binding/)).toBeVisible();
+  await expect(page.getByTestId("payment-uncertain")).toHaveCount(0);
+  expect(paymentHeaders).toHaveLength(0);
 });
 
 test("two browser contexts receive isolated replay session ids", async ({ browser }) => {
