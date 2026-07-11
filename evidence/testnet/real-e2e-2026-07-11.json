@@ -1,0 +1,62 @@
+{
+  "schema": "proofline.injective-e2e-evidence.v1",
+  "capturedAt": "2026-07-11T11:16:50.882Z",
+  "network": {
+    "caip2": "eip155:1439",
+    "chainId": 1439,
+    "explorer": "https://testnet.blockscout.injective.network"
+  },
+  "registry": {
+    "address": "0x959538bE97f6Fc3A09C823514acC176681155A7e",
+    "deploymentTransaction": "0x87bf72e57d0c6c2768a9fae0177209cfd06d3d3b2c29b12986b350352f9286fc",
+    "anchorerGrantTransaction": "0x72704feff656f75de591da4ee624333294509b76beaba1b4925109096bd748b3",
+    "deployedCodeHash": "0xb18ca7e2ae1827086a33b6c57212d6fcac64dc76eba4e6e822377273d9de4858",
+    "sourceVerification": {
+      "status": "fully-verified",
+      "compiler": "v0.8.35+commit.47b9dedd",
+      "optimizerRuns": 200,
+      "evmVersion": "paris"
+    }
+  },
+  "anchor": {
+    "matchId": "WC-2022-WAL-IRN",
+    "eventId": "final-result",
+    "eventHash": "0x088bd2d1850c38ea45bc365549142d1cd240c8c72339a1c5c7d645d0fad6f10f",
+    "evidenceRoot": "0x696dc277d6766b67d90774b5d8e0c021a7ba114f18c7110e70cba75b8e0d8d3b",
+    "evidenceScoreBps": 9649,
+    "revision": 1,
+    "settlementAllowed": true,
+    "blockNumber": 133190667,
+    "timestamp": "2026-07-11T11:16:00.000000Z",
+    "explorerResult": "success",
+    "transactionHash": "0x455e933b149e8f291d41f5e5fc58fdca55fdb56c7cfd3a9e1b2f55d32f6c6038",
+    "explorerUrl": "https://testnet.blockscout.injective.network/tx/0x455e933b149e8f291d41f5e5fc58fdca55fdb56c7cfd3a9e1b2f55d32f6c6038"
+  },
+  "x402": {
+    "implementation": "@injectivelabs/x402@0.0.1",
+    "priceAtomic": "10000",
+    "priceDisplay": "0.01 USDC",
+    "asset": "0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d",
+    "payer": "0x672044f1b95740e003D5E62671E6c1DE4Cc058b0",
+    "payee": "0x4595f5a3372F1ca653329140146081d309Ac2bf2",
+    "transactionHash": "0x79700fa00ff0d0c7a5821608f6221c7805b2feb3fe72133d526b491c41fe624a",
+    "explorerUrl": "https://testnet.blockscout.injective.network/tx/0x79700fa00ff0d0c7a5821608f6221c7805b2feb3fe72133d526b491c41fe624a",
+    "explorerStatus": "success",
+    "receiptStatus": "0x1",
+    "payerUsdcBefore": "20.00",
+    "payerUsdcAfter": "19.99",
+    "payeeUsdcBefore": "20.00",
+    "payeeUsdcAfter": "20.01"
+  },
+  "proof": {
+    "packetHash": "0x66b76502500cd96931a10675029c404f41de66f29d38fa2438ff4e93baa2ba2c",
+    "evidenceRoot": "0x696dc277d6766b67d90774b5d8e0c021a7ba114f18c7110e70cba75b8e0d8d3b",
+    "issuerAddress": "0x9D6d0498e2F9443f429F9b21F0567cD57A0b56b6",
+    "verificationLayers": {
+      "integrity": true,
+      "trustedIssuerSignature": true,
+      "latestOnchainCommitment": true
+    }
+  },
+  "disclosure": "One real Injective testnet anchor and one real 0.01 test-USDC x402 settlement were executed. No mainnet asset was used. CCTP remains future work."
+}

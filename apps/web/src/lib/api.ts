@@ -1,6 +1,8 @@
 import type {
   DecisionResponse,
   IntegrationsResponse,
+  MatchCatalogResponse,
+  McpRuntimeResponse,
   PaymentQuote,
   ProofPacketResponse,
   ProofVerificationResponse,
@@ -110,6 +112,10 @@ export const api = {
   pauseReplay: () => request<ReplaySnapshot>("/replay/pause", { method: "POST" }),
 
   getIntegrations: () => request<IntegrationsResponse>("/integrations"),
+
+  getMatchCatalog: () => request<MatchCatalogResponse>("/matches"),
+
+  getMcpRuntime: () => request<McpRuntimeResponse>("/mcp/runtime"),
 
   getDecision: (matchId: string, eventId: string) =>
     request<DecisionResponse>(

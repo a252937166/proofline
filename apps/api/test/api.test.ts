@@ -1,10 +1,14 @@
 import request from "supertest";
+import { buildProofPacket } from "@proofline/core";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApi, type ApiRuntime } from "../src/app.js";
+import { explorerTransaction } from "../src/anchor.js";
 
 const MATCH_ID = "WC-2022-WAL-IRN";
+const ISSUER_PRIVATE_KEY =
+  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a841e889ecbcf9c93f4";
 
 describe("Proofline API", () => {
   let runtime: ApiRuntime | undefined;
@@ -12,6 +16,7 @@ describe("Proofline API", () => {
   afterEach(() => {
     runtime?.dispose();
     runtime = undefined;
+    vi.unstubAllGlobals();
   });
 
   function boot(env: NodeJS.ProcessEnv = { NODE_ENV: "test" }): ApiRuntime {
@@ -32,7 +37,8 @@ describe("Proofline API", () => {
     expect(health.body).toMatchObject({
       status: "ok",
       service: "proofline-api",
-      dataMode: "historical-replay",
+      dataMode: "multi-mode-catalog",
+      liveProviderActive: false,
     });
 
     const state = await request(active.app).get("/api/replay/state").expect(200);
@@ -49,6 +55,61 @@ describe("Proofline API", () => {
       .expect(200);
     expect(dataset.headers["cache-control"]).toContain("immutable");
     expect(dataset.body.match.id).toBe(MATCH_ID);
+  });
+
+  it("serves honest 2026 delayed and scheduled catalog entries with provenance", async () => {
+    const active = boot();
+    const catalog = await request(active.app).get("/api/matches").expect(200);
+    expect(catalog.headers["x-data-mode"]).toBe("catalog");
+    expect(catalog.body.liveProviderActive).toBe(false);
+    expect(catalog.body.matches).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "WC-2026-M97-FRA-MAR",
+          dataMode: "delayed",
+          status: "finished",
+          score: { home: 2, away: 0 },
+        }),
+        expect.objectContaining({
+          id: "WC-2026-M99-NOR-ENG",
+          dataMode: "scheduled",
+          status: "scheduled",
+          score: null,
+        }),
+        expect.objectContaining({
+          id: MATCH_ID,
+          dataMode: "historical-replay",
+        }),
+      ]),
+    );
+
+    const delayed = await request(active.app)
+      .get("/api/matches/WC-2026-M97-FRA-MAR/events")
+      .expect(200);
+    expect(delayed.headers["x-data-mode"]).toBe("delayed");
+    expect(delayed.body.events[0]).toMatchObject({
+      verification: {
+        state: "verified",
+        evidenceScore: expect.any(Number),
+        confidenceLabel: expect.stringContaining("/100"),
+        activeSourceGroupCount: 2,
+      },
+      decision: { allowed: false, state: "held" },
+    });
+    expect(delayed.body.events[0].observations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          provenance: expect.objectContaining({
+            rawPayloadHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+            receivedAt: expect.any(String),
+            eventOccurredAt: expect.any(String),
+            adapterVersion: expect.any(String),
+            policyConfigHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+            verifierVersionHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+          }),
+        }),
+      ]),
+    );
   });
 
   it("isolates replay cursors between browser sessions", async () => {
@@ -126,8 +187,8 @@ describe("Proofline API", () => {
       .expect(200);
     expect(response.body.providers.apiFootball).toMatchObject({
       configured: true,
-      status: "ready",
-      capability: "credential-readiness-only",
+      status: "credential-present-unverified",
+      capability: "credential-presence-only",
     });
     expect(response.body.providers.footballData.configured).toBe(true);
     expect(response.body.injective).toMatchObject({
@@ -246,6 +307,10 @@ describe("Proofline API", () => {
     expect(paid.body.packet).toMatchObject({
       schema: "proofline.packet.v1",
       eventId: "final-result",
+      evidenceRoot: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+      issuerAddress: expect.stringMatching(/^0x[0-9a-fA-F]{40}$/),
+      issuerSignature: expect.stringMatching(/^0x[0-9a-f]+$/),
+      signatureScheme: "eip712",
       settlement: { allowed: true },
       anchor: { mode: "demo" },
     });
@@ -261,12 +326,43 @@ describe("Proofline API", () => {
       .expect(200);
     expect(verified.body.valid).toBe(true);
     expect(verified.body).toMatchObject({
-      integrityOnly: true,
+      integrityOnly: false,
+      integrity: { valid: true },
+      signature: {
+        valid: true,
+        cryptographicValid: true,
+        trustedIssuer: true,
+        scheme: "eip712",
+      },
       onchain: { checked: false, mode: "demo" },
     });
     expect(verified.body.checks.every((check: { passed: boolean }) => check.passed)).toBe(
       true,
     );
+
+    const attackerPacket = await buildProofPacket({
+      match: paid.body.packet.match,
+      eventId: paid.body.packet.eventId,
+      observations: paid.body.packet.observations,
+      verification: paid.body.packet.verification,
+      anchor: paid.body.packet.anchor,
+      issuerPrivateKey:
+        "0x8b3a350cf5c34c9194ca3a545d0a4f46f0aa1e4b90f3f2a8f3b3c0f5f9d0c7d1",
+      now: new Date(paid.body.packet.generatedAt),
+    });
+    const untrusted = await request(active.app)
+      .post("/api/proofs/verify")
+      .send({ packet: attackerPacket })
+      .expect(422);
+    expect(untrusted.body).toMatchObject({
+      valid: false,
+      integrity: { valid: true },
+      signature: {
+        cryptographicValid: true,
+        trustedIssuer: false,
+        valid: false,
+      },
+    });
 
     const tampered = structuredClone(paid.body.packet) as {
       packetHash: string;
@@ -317,7 +413,7 @@ describe("Proofline API", () => {
       .expect({
         error: "x402_live_misconfigured",
         message:
-          "X402_MODE=injective-testnet requires X402_PAY_TO plus either X402_FACILITATOR_PRIVATE_KEY or X402_FACILITATOR_URL. The API fails closed and will not fake payment success.",
+          "X402_MODE=injective-testnet requires X402_PAY_TO plus either X402_FACILITATOR_URL or an inline facilitator key. Production inline settlement also requires X402_RPC_PROXY_TOKEN. The API fails closed and will not fake payment success.",
       });
   });
 
@@ -363,6 +459,291 @@ describe("Proofline API", () => {
     );
   });
 
+  it("protects and method-routes the x402 receipt-indexing RPC proxy", async () => {
+    const facilitatorPrivateKey = generatePrivateKey();
+    const payTo = privateKeyToAccount(facilitatorPrivateKey).address;
+    const proxyToken = "x402_test_proxy_token_1234567890abcdef";
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ jsonrpc: "2.0", id: 1, result: null }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const active = boot({
+      NODE_ENV: "test",
+      X402_MODE: "injective-testnet",
+      X402_PAY_TO: payTo,
+      X402_FACILITATOR_PRIVATE_KEY: facilitatorPrivateKey,
+      X402_RPC_PROXY_TOKEN: proxyToken,
+      INJECTIVE_TESTNET_RPC: "http://127.0.0.1:18545",
+    });
+
+    await request(active.app)
+      .post("/api/internal/evm-rpc/wrong-token")
+      .send({ jsonrpc: "2.0", id: 1, method: "eth_chainId", params: [] })
+      .expect(404);
+    await request(active.app)
+      .post(`/api/internal/evm-rpc/${proxyToken}`)
+      .send({ jsonrpc: "2.0", id: 1, method: "personal_sign", params: [] })
+      .expect(200, {
+        jsonrpc: "2.0",
+        id: 1,
+        error: { code: -32601, message: "Method not found" },
+      });
+    await request(active.app)
+      .post(`/api/internal/evm-rpc/${proxyToken}`)
+      .send({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "eth_getTransactionReceipt",
+        params: [`0x${"1".repeat(64)}`],
+      })
+      .expect(200);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe(
+      "https://testnet.blockscout-api.injective.network/api/eth-rpc",
+    );
+    await request(active.app)
+      .post(`/api/internal/evm-rpc/${proxyToken}`)
+      .send({
+        jsonrpc: "2.0",
+        id: 3,
+        method: "eth_getTransactionByHash",
+        params: [`0x${"2".repeat(64)}`],
+      })
+      .expect(200);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe(
+      "https://testnet.blockscout-api.injective.network/api/eth-rpc",
+    );
+    await request(active.app)
+      .post(`/api/internal/evm-rpc/${proxyToken}`)
+      .send({ jsonrpc: "2.0", id: 2, method: "eth_chainId", params: [] })
+      .expect(200);
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe(
+      "http://127.0.0.1:18545",
+    );
+  });
+
+  it("settles one concurrent x402 authorization and serves later retries from cache", async () => {
+    const payTo = `0x${"9".repeat(40)}`;
+    const payer = `0x${"8".repeat(40)}`;
+    const nonce = `0x${"7".repeat(64)}`;
+    const transaction = `0x${"6".repeat(64)}`;
+    const active = boot({
+      NODE_ENV: "test",
+      X402_MODE: "injective-testnet",
+      X402_PAY_TO: payTo,
+      X402_FACILITATOR_URL: "https://facilitator.example",
+    });
+    await finishReplay(active);
+    const proofUrl = `/api/matches/${MATCH_ID}/proof?eventId=final-result`;
+    const quote = await request(active.app).get(proofUrl).expect(402);
+
+    let releaseSettlement!: () => void;
+    let settlementStarted!: () => void;
+    const settlementGate = new Promise<void>((resolve) => {
+      releaseSettlement = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      settlementStarted = resolve;
+    });
+    let verifyCalls = 0;
+    let settleCalls = 0;
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith("/verify")) {
+        verifyCalls += 1;
+        return new Response(JSON.stringify({ isValid: true, payer }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      if (url.endsWith("/settle")) {
+        settleCalls += 1;
+        settlementStarted();
+        await settlementGate;
+        return new Response(
+          JSON.stringify({
+            success: true,
+            transaction,
+            network: "eip155:1439",
+            amount: "10000",
+            payer,
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      }
+      throw new Error(`Unexpected mocked facilitator URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const accepted = quote.body.accepts[0] as Record<string, unknown>;
+    const paymentSignature = Buffer.from(
+      JSON.stringify({
+        x402Version: 2,
+        accepted,
+        payload: {
+          signature: "0x12",
+          authorization: {
+            from: payer,
+            to: payTo,
+            value: "10000",
+            validAfter: "0",
+            validBefore: "9999999999",
+            nonce,
+          },
+        },
+      }),
+    ).toString("base64");
+
+    const firstRequest = request(active.app)
+      .get(proofUrl)
+      .set("PAYMENT-SIGNATURE", paymentSignature)
+      .then((response) => response);
+    await started;
+
+    const concurrent = await request(active.app)
+      .get(proofUrl)
+      .set("PAYMENT-SIGNATURE", paymentSignature)
+      .expect(409);
+    expect(concurrent.body).toMatchObject({
+      error: "payment-pending",
+      paymentState: "pending-uncertain",
+      conflict: "proof",
+    });
+    expect(settleCalls).toBe(1);
+
+    releaseSettlement();
+    const first = await firstRequest;
+    expect(first.status).toBe(200);
+    expect(first.body.payment).toMatchObject({
+      mode: "live",
+      valueTransferred: true,
+      transactionHash: transaction,
+      payer,
+    });
+
+    const cached = await request(active.app)
+      .get(proofUrl)
+      .set("PAYMENT-SIGNATURE", paymentSignature)
+      .expect(200);
+    expect(cached.body.payment).toMatchObject({
+      mode: "live",
+      valueTransferred: false,
+      cached: true,
+      alreadyPaid: true,
+      transactionHash: transaction,
+      payer: payer.toLowerCase(),
+    });
+    expect(verifyCalls).toBe(1);
+    expect(settleCalls).toBe(1);
+  });
+
+  it("keeps an uncertain facilitator outcome pending and refuses a second settlement", async () => {
+    const payTo = `0x${"5".repeat(40)}`;
+    const payer = `0x${"4".repeat(40)}`;
+    const active = boot({
+      NODE_ENV: "test",
+      X402_MODE: "injective-testnet",
+      X402_PAY_TO: payTo,
+      X402_FACILITATOR_URL: "https://facilitator.example",
+    });
+    await finishReplay(active);
+    const proofUrl = `/api/matches/${MATCH_ID}/proof?eventId=final-result`;
+    const quote = await request(active.app).get(proofUrl).expect(402);
+    let verifyCalls = 0;
+    let settleCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input);
+        if (url.endsWith("/verify")) {
+          verifyCalls += 1;
+          return new Response(JSON.stringify({ isValid: true, payer }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.endsWith("/settle")) {
+          settleCalls += 1;
+          return new Response("facilitator timeout", { status: 504 });
+        }
+        throw new Error(`Unexpected mocked facilitator URL: ${url}`);
+      }),
+    );
+    const paymentSignature = Buffer.from(
+      JSON.stringify({
+        x402Version: 2,
+        accepted: quote.body.accepts[0],
+        payload: {
+          signature: "0x12",
+          authorization: {
+            from: payer,
+            to: payTo,
+            value: "10000",
+            validAfter: "0",
+            validBefore: "9999999999",
+            nonce: `0x${"3".repeat(64)}`,
+          },
+        },
+      }),
+    ).toString("base64");
+
+    const uncertain = await request(active.app)
+      .get(proofUrl)
+      .set("PAYMENT-SIGNATURE", paymentSignature)
+      .expect(402);
+    expect(uncertain.body.error).toBe("payment_settlement_failed");
+
+    const retry = await request(active.app)
+      .get(proofUrl)
+      .set("PAYMENT-SIGNATURE", paymentSignature)
+      .expect(409);
+    expect(retry.body).toMatchObject({
+      error: "payment-pending",
+      paymentState: "pending-uncertain",
+    });
+    expect(verifyCalls).toBe(1);
+    expect(settleCalls).toBe(1);
+  });
+
+  it("rejects an Explorer transaction whose EVM result reverted", async () => {
+    const hash = `0x${"1".repeat(64)}` as const;
+    const body = {
+      hash,
+      status: "ok",
+      result: "error",
+      revert_reason: "execution reverted",
+      block_number: 123,
+      timestamp: "2026-07-11T10:48:38.000000Z",
+      from: { hash: "0x1111111111111111111111111111111111111111" },
+      to: { hash: "0x2222222222222222222222222222222222222222" },
+      raw_input: "0x1234",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    const parsed = await explorerTransaction(
+      "https://testnet.blockscout-api.injective.network/api",
+      hash,
+    );
+    expect(parsed).toBeNull();
+  });
+
   it("rejects a payment that is not bound to an active frozen packet", async () => {
     const active = boot();
     await finishReplay(active);
@@ -380,6 +761,125 @@ describe("Proofline API", () => {
       .expect((response) => {
         expect(response.headers["payment-response"]).toBeUndefined();
         expect(response.body.error).toBe("proof_quote_missing_or_expired");
+      });
+  });
+
+  it("rejects invalid session and event identifiers instead of silently defaulting", async () => {
+    const active = boot();
+    await request(active.app)
+      .get("/api/replay/state")
+      .set("X-Proofline-Session", "bad session")
+      .expect(400)
+      .expect({
+        error: "invalid_session_id",
+        message:
+          "X-Proofline-Session must be 8-64 letters, digits, underscores, or hyphens.",
+      });
+    await request(active.app)
+      .get(`/api/matches/${MATCH_ID}/decision?eventId=bad%20event`)
+      .expect(400)
+      .expect({ error: "invalid_event_id" });
+  });
+
+  it("does not emit wildcard CORS in production without an explicit origin", async () => {
+    let active = boot({
+      NODE_ENV: "production",
+      PROOFLINE_ISSUER_PRIVATE_KEY: ISSUER_PRIVATE_KEY,
+    });
+    const closed = await request(active.app).get("/api/health").expect(200);
+    expect(closed.headers["access-control-allow-origin"]).toBeUndefined();
+
+    active.dispose();
+    active = createApi({
+      env: {
+        NODE_ENV: "production",
+        WEB_ORIGIN: "https://proofline.example",
+        PROOFLINE_ISSUER_PRIVATE_KEY: ISSUER_PRIVATE_KEY,
+      },
+    });
+    runtime = active;
+    const configured = await request(active.app).get("/api/health").expect(200);
+    expect(configured.headers["access-control-allow-origin"]).toBe(
+      "https://proofline.example",
+    );
+  });
+
+  it("fails closed when production has no persistent proof issuer", () => {
+    expect(() => createApi({ env: { NODE_ENV: "production" } })).toThrow(
+      /PROOFLINE_ISSUER_PRIVATE_KEY is required/,
+    );
+  });
+
+  it("reports Agent-ready only from a fresh real MCP heartbeat and execution log", async () => {
+    const active = boot();
+    const initial = await request(active.app).get("/api/mcp/runtime").expect(200);
+    expect(initial.body).toMatchObject({
+      health: "never-seen",
+      agentReady: false,
+      logs: [],
+    });
+    const at = new Date().toISOString();
+    await request(active.app)
+      .post("/api/mcp/runtime/heartbeat")
+      .send({
+        sessionId: "mcp_runtime_test",
+        serverVersion: "0.2.0",
+        transport: "stdio",
+        tools: ["get_match_events"],
+        at,
+      })
+      .expect(202);
+    await request(active.app)
+      .post("/api/mcp/runtime/logs")
+      .send({
+        id: "execution-test-0001",
+        sessionId: "mcp_runtime_test",
+        tool: "get_match_events",
+        inputSummary: { match_id: MATCH_ID },
+        outcome: "success",
+        resultSummary: "historical-replay events returned",
+        durationMs: 12,
+        at,
+      })
+      .expect(202);
+    const connected = await request(active.app)
+      .get("/api/mcp/runtime")
+      .expect(200);
+    expect(connected.body).toMatchObject({
+      health: "online",
+      runtimeConnected: true,
+      agentReady: true,
+      logs: [
+        expect.objectContaining({
+          tool: "get_match_events",
+          outcome: "success",
+          durationMs: 12,
+        }),
+      ],
+    });
+  });
+
+  it("rate-limits repeated paid proof attempts by IP and session", async () => {
+    const active = boot();
+    await finishReplay(active);
+    const proofUrl = `/api/matches/${MATCH_ID}/proof?eventId=final-result`;
+    const quote = await request(active.app).get(proofUrl).expect(402);
+    const signature = String(quote.body.demoSandbox.paymentSignature);
+    const wrong = `${signature.slice(0, -1)}${signature.endsWith("0") ? "1" : "0"}`;
+    for (let index = 0; index < 12; index += 1) {
+      await request(active.app)
+        .get(proofUrl)
+        .set("X-Proofline-Session", "rate_limit_session")
+        .set("PAYMENT-SIGNATURE", wrong)
+        .expect(409);
+    }
+    await request(active.app)
+      .get(proofUrl)
+      .set("X-Proofline-Session", "rate_limit_session")
+      .set("PAYMENT-SIGNATURE", wrong)
+      .expect(429)
+      .expect((response) => {
+        expect(response.headers["retry-after"]).toBe("60");
       });
   });
 });

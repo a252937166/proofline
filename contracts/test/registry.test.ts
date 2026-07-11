@@ -14,6 +14,7 @@ const output = JSON.parse(
       sources: { "MatchProofRegistry.sol": { content: source } },
       settings: {
         optimizer: { enabled: true, runs: 200 },
+        viaIR: true,
         evmVersion: "paris",
         outputSelection: {
           "*": { "*": ["abi", "evm.bytecode.object"] },
@@ -51,7 +52,9 @@ describe("MatchProofRegistry artifact", () => {
       "REGISTRY_ID",
       "MIN_VERIFIED_CONFIDENCE_BPS",
       "anchorProof",
-      "anchorDecision",
+      "appendRevision",
+      "verifyHistoricalProof",
+      "verifyLatestSettlementProof",
       "verifyProof",
       "getDecision",
       "transferOwnership",
@@ -65,7 +68,8 @@ describe("MatchProofRegistry artifact", () => {
   it("keeps the source-level guards that compilation alone cannot infer", () => {
     expect(source).toContain("VerifiedConfidenceTooLow");
     expect(source).toContain("ObservedAtInFuture");
-    expect(source).toContain("latestRevisionByEvent");
+    expect(source).toContain("InvalidStateTransition");
+    expect(source).toContain("evidenceRoot");
     expect(source).toContain("previousDecisionHash");
   });
 });

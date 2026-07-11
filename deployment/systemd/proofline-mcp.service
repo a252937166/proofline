@@ -1,0 +1,40 @@
+[Unit]
+Description=Proofline MCP runtime heartbeat
+After=network-online.target proofline-api.service
+Requires=proofline-api.service
+Wants=network-online.target
+StartLimitInterval=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=proofline
+Group=proofline
+WorkingDirectory=/opt/proofline/current
+EnvironmentFile=/opt/proofline/shared/mcp.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+# Keep stdio open without inventing tool calls. The real MCP server sends its
+# own heartbeat immediately and every minute; client calls are audited by API.
+ExecStart=/bin/bash -o pipefail -c 'tail -f /dev/null | node /opt/proofline/current/packages/mcp/dist/index.js >/dev/null'
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=30
+TimeoutStopSec=20
+KillSignal=SIGTERM
+UMask=0077
+LimitNOFILE=4096
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=proofline-mcp
+
+[Install]
+WantedBy=multi-user.target

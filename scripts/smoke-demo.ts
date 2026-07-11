@@ -73,26 +73,50 @@ assert(quote.mode === "demo-sandbox", "Smoke test only accepts the labelled sand
 assert(quote.demoSandbox?.paymentSignature, "Sandbox quote omitted its deterministic retry token");
 
 const paid = await json<{
-  packet: { packetHash: string };
+  packet: {
+    packetHash: string;
+    evidenceRoot: string;
+    issuerAddress: string;
+    issuerSignature: string;
+    signatureScheme: string;
+  };
   payment: { simulated: boolean; valueTransferred: boolean };
 }>(proofPath, {
   headers: { "PAYMENT-SIGNATURE": quote.demoSandbox.paymentSignature },
 });
 assert(paid.payment.simulated && !paid.payment.valueTransferred, "Sandbox receipt made a value-transfer claim");
+assert(/^0x[0-9a-fA-F]{64}$/.test(paid.packet.evidenceRoot), "Proof packet omitted its evidenceRoot");
+assert(/^0x[0-9a-fA-F]{40}$/.test(paid.packet.issuerAddress), "Proof packet omitted its issuer address");
+assert(/^0x[0-9a-fA-F]+$/.test(paid.packet.issuerSignature), "Proof packet omitted its issuer signature");
+assert(paid.packet.signatureScheme === "eip712", "Proof packet did not identify EIP-712 signing");
 
 const verified = await json<{
   valid: boolean;
-  integrityOnly: boolean;
   onchain: { checked: boolean };
+  verificationLayers: {
+    integrity: { valid: boolean };
+    issuerSignature: { valid: boolean; issuerAddress: string };
+    onchain: { checked: boolean; valid: boolean };
+  };
 }>("/proofs/verify", {
   method: "POST",
   body: JSON.stringify({ packet: paid.packet }),
 });
 assert(verified.valid, "Portable packet did not pass deterministic verification");
-assert(verified.integrityOnly && !verified.onchain.checked, "Integrity endpoint overstated an on-chain check");
+assert(verified.verificationLayers.integrity.valid, "Packet integrity layer did not pass");
+assert(verified.verificationLayers.issuerSignature.valid, "Issuer signature layer did not pass");
+assert(
+  verified.verificationLayers.issuerSignature.issuerAddress.toLowerCase() ===
+    paid.packet.issuerAddress.toLowerCase(),
+  "Recovered issuer did not match the signed packet issuer",
+);
+assert(
+  !verified.onchain.checked && !verified.verificationLayers.onchain.checked,
+  "Demo packet verification overstated an on-chain registry read",
+);
 
 const tampered = structuredClone(paid.packet);
-tampered.packetHash = `0x${"0".repeat(64)}`;
+tampered.evidenceRoot = `0x${"0".repeat(64)}`;
 const tamperedResponse = await fetch(`${base}/proofs/verify`, {
   method: "POST",
   headers: { accept: "application/json", "content-type": "application/json" },
@@ -111,6 +135,10 @@ process.stdout.write(
       anchorMode: decision.anchor.receipt.mode,
       x402Status: 402,
       sandboxValueTransferred: paid.payment.valueTransferred,
+      evidenceRoot: paid.packet.evidenceRoot,
+      integrityValid: verified.verificationLayers.integrity.valid,
+      issuerSignatureValid:
+        verified.verificationLayers.issuerSignature.valid,
       packetValid: verified.valid,
       tamperRejected: true,
     },
