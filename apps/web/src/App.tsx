@@ -10,8 +10,11 @@ import {
 import { JudgeDemo } from "./components/JudgeDemo";
 import { CatalogMatchView, MatchCatalogBar } from "./components/MatchCatalog";
 import { useReplay, type ReplayAction } from "./hooks/useReplay";
-import { api, ApiError } from "./lib/api";
-import { createBrowserPaymentSignature } from "./lib/wallet";
+import { api, ApiError, PROOFLINE_SESSION_ID } from "./lib/api";
+import {
+  createBrowserPaymentSignature,
+  type BrowserSigningStep,
+} from "./lib/wallet";
 import type {
   AnchorRecord,
   CatalogMatchDetail,
@@ -646,6 +649,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
   const [verification, setVerification] = useState<ProofVerificationResponse | null>(null);
   const [walletAccount, setWalletAccount] = useState<string | null>(null);
   const [paymentNonce, setPaymentNonce] = useState<string | null>(null);
+  const [signingStep, setSigningStep] = useState<BrowserSigningStep | null>(null);
   const [tamperResult, setTamperResult] = useState<"idle" | "running" | "passed" | "failed">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -673,6 +677,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
     onVerification(null);
     setWalletAccount(null);
     setPaymentNonce(null);
+    setSigningStep(null);
     paymentSignatureRef.current = null;
     setTamperResult("idle");
     setMessage(null);
@@ -700,6 +705,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
   const purchase = async () => {
     if (!quote) return;
     setStatus("paying");
+    setSigningStep(null);
     setMessage(null);
     let liveAuthorizationCreated = false;
     let result: ProofPacketResponse;
@@ -709,12 +715,15 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
         if (!integrations) throw new Error("Integration policy is not loaded; payment signing is disabled.");
         const browserPayment = await createBrowserPaymentSignature({
           quote,
+          sessionId: PROOFLINE_SESSION_ID,
           expectedAsset: integrations.x402.asset.address,
           expectedPayee: integrations.x402.payTo,
           maximumAmount: integrations.x402.priceAtomic,
           rpcUrl: integrations.injective.publicRpcUrl,
           explorerUrl: integrations.injective.explorerUrl,
+          onSigningStep: setSigningStep,
         });
+        setSigningStep(null);
         paymentSignature = browserPayment.header;
         liveAuthorizationCreated = true;
         setWalletAccount(browserPayment.account);
@@ -723,6 +732,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
       paymentSignatureRef.current = paymentSignature;
       result = await api.submitProofPayment(matchId, eventId, paymentSignature);
     } catch (cause) {
+      setSigningStep(null);
       if (cause instanceof ApiError && cause.status === 409) {
         setQuote(null);
         setStatus("idle");
@@ -741,6 +751,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
     }
 
     setProof(result);
+    setSigningStep(null);
     paymentSignatureRef.current = null;
     onProof(result);
     setStatus("paid");
@@ -848,7 +859,16 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
               <div><dt>Pay to</dt><dd><code>{truncate(getQuoteDetail(quote, "payTo"), 9, 7)}</code></dd></div>
               <div><dt>Header</dt><dd><code>PAYMENT-SIGNATURE</code></dd></div>
             </dl>
-            {(status === "quoted" || status === "paying" || status === "error") && <button type="button" className="amber-button" onClick={() => void purchase()} disabled={status === "paying"} data-testid="submit-proof-payment">{status === "paying" ? (isSandbox ? "Settling sandbox receipt…" : "Waiting for wallet signature…") : isSandbox ? "Run sandbox settlement" : "Connect wallet & sign test USDC"}<Icon name="arrow" /></button>}
+            {!isSandbox && (
+              <div className="signature-sequence" data-testid="signature-sequence">
+                <span>2 signatures · 1 payment</span>
+                <ol>
+                  <li className={signingStep === 1 ? "active" : ""}><i>01</i><p><b>USDC authorization</b><small>Authorizes the single 0.01 test USDC transfer.</small></p></li>
+                  <li className={signingStep === 2 ? "active" : ""}><i>02</i><p><b>Proof binding</b><small>Binds this report and session. It does not authorize another transfer.</small></p></li>
+                </ol>
+              </div>
+            )}
+            {(status === "quoted" || status === "paying" || status === "error") && <button type="button" className="amber-button" onClick={() => void purchase()} disabled={status === "paying"} data-testid="submit-proof-payment">{status === "paying" ? (isSandbox ? "Settling sandbox receipt…" : signingStep === 1 ? "Confirm 1/2 · USDC authorization" : signingStep === 2 ? "Confirm 2/2 · Proof binding" : "Opening wallet…") : isSandbox ? "Run sandbox settlement" : "Connect wallet · sign 2 messages"}<Icon name="arrow" /></button>}
           </section>
         )}
 
