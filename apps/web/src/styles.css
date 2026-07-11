@@ -2301,6 +2301,77 @@ a {
   color: #d5e1e1;
 }
 
+.signature-sequence {
+  margin: -5px 0 16px;
+  padding: 11px 12px 12px;
+  border: 1px solid #435960;
+  background: rgba(4, 23, 34, 0.42);
+}
+
+.signature-sequence > span {
+  display: block;
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.signature-sequence ol {
+  margin: 10px 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  list-style: none;
+}
+
+.signature-sequence li {
+  min-width: 0;
+  padding: 9px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+  color: #91a6aa;
+  border: 1px solid #344b53;
+  transition: color 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.signature-sequence li.active {
+  color: #e8f3f2;
+  border-color: var(--amber);
+  background: rgba(246, 183, 60, 0.08);
+  animation: flow-step-engage 380ms var(--ease-broadcast) both;
+}
+
+.signature-sequence i {
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.signature-sequence p {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.signature-sequence b {
+  color: currentColor;
+  font-family: var(--display);
+  font-size: 10px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.signature-sequence small {
+  color: #789098;
+  font-size: 8px;
+  line-height: 1.35;
+}
+
 .packet-seal {
   padding: 13px;
   display: flex;
@@ -5169,6 +5240,15 @@ a {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+
   .source-lanes.is-scanning::after,
   .source-lanes.is-scanning .source-lane-head i,
   .catalog-audit-result.audit-running > span,

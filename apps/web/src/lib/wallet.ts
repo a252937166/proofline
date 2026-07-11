@@ -1,9 +1,15 @@
 import type { PaymentQuote } from "../types";
+import { keccak256, stringToHex } from "viem";
 
 const INJECTIVE_TESTNET_NETWORK = "eip155:1439";
 const INJECTIVE_TESTNET_CHAIN_ID = 1439;
 const INJECTIVE_TESTNET_CHAIN_HEX = "0x59f";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const BYTES32_PATTERN = /^0x[0-9a-fA-F]{64}$/;
+const SIGNATURE_PATTERN = /^0x[0-9a-fA-F]+$/;
+const PROOF_PURCHASE_SCHEMA = "proofline.proof-purchase.v1";
+const PROOF_PURCHASE_DOMAIN_NAME = "Proofline Proof Purchase";
+const PROOF_PURCHASE_DOMAIN_VERSION = "1";
 
 interface EthereumProvider {
   request(args: { method: string; params?: unknown[] }): Promise<unknown>;
@@ -31,6 +37,8 @@ export interface BrowserPayment {
   nonce: string;
   requirement: X402Requirement;
 }
+
+export type BrowserSigningStep = 1 | 2;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object";
@@ -67,6 +75,39 @@ export function readX402Requirement(quote: PaymentQuote): X402Requirement {
   const requirement = candidates.map(asRequirement).find(Boolean);
   if (!requirement) throw new Error("The 402 response did not contain a usable payment requirement.");
   return requirement;
+}
+
+function readProofPacketHash(
+  quote: PaymentQuote,
+  requirement: X402Requirement,
+): `0x${string}` {
+  const extensions = isRecord(quote.body.extensions) ? quote.body.extensions : null;
+  const proofline = extensions && isRecord(extensions.proofline)
+    ? extensions.proofline
+    : null;
+  const purchaseBinding = proofline && isRecord(proofline.purchaseBinding)
+    ? proofline.purchaseBinding
+    : null;
+  const quotePacketHash = proofline?.packetHash;
+  const acceptedPacketHash = requirement.extra.prooflineQuoteId;
+
+  if (
+    typeof quotePacketHash !== "string" ||
+    !BYTES32_PATTERN.test(quotePacketHash) ||
+    typeof acceptedPacketHash !== "string" ||
+    !BYTES32_PATTERN.test(acceptedPacketHash) ||
+    quotePacketHash.toLowerCase() !== acceptedPacketHash.toLowerCase() ||
+    proofline?.frozen !== true ||
+    purchaseBinding?.required !== true ||
+    purchaseBinding.schema !== PROOF_PURCHASE_SCHEMA ||
+    purchaseBinding.primaryType !== "ProofPurchase"
+  ) {
+    throw new Error(
+      "Payment refused: the quote is missing a valid frozen ProofPurchase binding. Request a fresh quote.",
+    );
+  }
+
+  return quotePacketHash.toLowerCase() as `0x${string}`;
 }
 
 function randomNonce(): string {
@@ -116,11 +157,13 @@ async function ensureInjectiveTestnet(
 
 export async function createBrowserPaymentSignature(options: {
   quote: PaymentQuote;
+  sessionId: string;
   expectedAsset: string;
   expectedPayee: string | null;
   maximumAmount: string;
   rpcUrl: string;
   explorerUrl: string;
+  onSigningStep?: (step: BrowserSigningStep) => void;
 }): Promise<BrowserPayment> {
   const provider = window.ethereum;
   if (!provider) {
@@ -157,6 +200,11 @@ export async function createBrowserPaymentSignature(options: {
   if (requirement.maxTimeoutSeconds <= 0 || requirement.maxTimeoutSeconds > 300) {
     throw new Error("Payment refused: the authorization window is outside the 5-minute policy cap.");
   }
+  if (!/^[A-Za-z0-9_-]{8,64}$/.test(options.sessionId)) {
+    throw new Error("Payment refused: the browser payment session is invalid.");
+  }
+
+  const packetHash = readProofPacketHash(options.quote, requirement);
 
   const tokenName = typeof requirement.extra.name === "string" ? requirement.extra.name : null;
   const tokenVersion = typeof requirement.extra.version === "string" ? requirement.extra.version : null;
@@ -206,12 +254,64 @@ export async function createBrowserPaymentSignature(options: {
     primaryType: "TransferWithAuthorization",
     message: authorization,
   };
+  options.onSigningStep?.(1);
   const signature = await provider.request({
     method: "eth_signTypedData_v4",
     params: [account, JSON.stringify(typedData)],
   });
-  if (typeof signature !== "string" || !/^0x[0-9a-fA-F]+$/.test(signature)) {
-    throw new Error("The wallet did not return a valid EIP-712 signature.");
+  if (typeof signature !== "string" || !SIGNATURE_PATTERN.test(signature)) {
+    throw new Error("The wallet did not return a valid USDC authorization signature.");
+  }
+
+  const purchaseMessage = {
+    packetHash,
+    payer: account,
+    payee: requirement.payTo,
+    amount: requirement.amount,
+    deadline: authorization.validBefore,
+    usdcNonce: authorization.nonce,
+    sessionHash: keccak256(
+      stringToHex(`proofline.purchase.session.v1:${options.sessionId}`),
+    ),
+  };
+  const purchaseTypedData = {
+    types: {
+      EIP712Domain: [
+        { name: "name", type: "string" },
+        { name: "version", type: "string" },
+        { name: "chainId", type: "uint256" },
+        { name: "verifyingContract", type: "address" },
+      ],
+      ProofPurchase: [
+        { name: "packetHash", type: "bytes32" },
+        { name: "payer", type: "address" },
+        { name: "payee", type: "address" },
+        { name: "amount", type: "uint256" },
+        { name: "deadline", type: "uint256" },
+        { name: "usdcNonce", type: "bytes32" },
+        { name: "sessionHash", type: "bytes32" },
+      ],
+    },
+    domain: {
+      name: PROOF_PURCHASE_DOMAIN_NAME,
+      version: PROOF_PURCHASE_DOMAIN_VERSION,
+      chainId: INJECTIVE_TESTNET_CHAIN_ID,
+      verifyingContract: requirement.asset,
+    },
+    primaryType: "ProofPurchase",
+    message: purchaseMessage,
+  };
+
+  options.onSigningStep?.(2);
+  const purchaseSignature = await provider.request({
+    method: "eth_signTypedData_v4",
+    params: [account, JSON.stringify(purchaseTypedData)],
+  });
+  if (
+    typeof purchaseSignature !== "string" ||
+    !SIGNATURE_PATTERN.test(purchaseSignature)
+  ) {
+    throw new Error("The wallet did not return a valid ProofPurchase binding signature.");
   }
 
   return {
@@ -222,6 +322,16 @@ export async function createBrowserPaymentSignature(options: {
       x402Version: 2,
       accepted: requirement,
       payload: { signature, authorization },
+      extensions: {
+        proofline: {
+          packetHash,
+          purchaseBinding: {
+            schema: PROOF_PURCHASE_SCHEMA,
+            message: purchaseMessage,
+            signature: purchaseSignature,
+          },
+        },
+      },
     }),
   };
 }

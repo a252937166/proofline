@@ -23,7 +23,10 @@ function replaySessionId(): string {
   return created;
 }
 
-const REPLAY_SESSION_ID = replaySessionId();
+// The x402 quote, ProofPurchase signature, and paid request must all use the
+// same browser-scoped session. Export the value so the wallet can bind the
+// second EIP-712 signature to the exact session sent on the wire.
+export const PROOFLINE_SESSION_ID = replaySessionId();
 
 export class ApiError extends Error {
   constructor(
@@ -42,7 +45,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     redirect: "error",
     headers: {
       Accept: "application/json",
-      "X-Proofline-Session": REPLAY_SESSION_ID,
+      "X-Proofline-Session": PROOFLINE_SESSION_ID,
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
       ...init?.headers,
     },
@@ -144,7 +147,7 @@ export const api = {
         redirect: "error",
         headers: {
           Accept: "application/json",
-          "X-Proofline-Session": REPLAY_SESSION_ID,
+          "X-Proofline-Session": PROOFLINE_SESSION_ID,
         },
       },
     );
