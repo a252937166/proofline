@@ -134,6 +134,7 @@ WEB_STAGE=$(mktemp -d /var/www/proofline/releases/.staging.XXXXXX)
 cleanup_staging() {
   [[ -n "${API_STAGE:-}" ]] && rm -rf "${API_STAGE}"
   [[ -n "${WEB_STAGE:-}" ]] && rm -rf "${WEB_STAGE}"
+  return 0
 }
 trap cleanup_staging EXIT INT TERM
 

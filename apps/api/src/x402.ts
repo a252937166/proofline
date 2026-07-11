@@ -49,6 +49,14 @@ function resourceUrl(req: Request, publicApiUrl?: string): string {
   return `${req.protocol}://${req.get("host")}${req.originalUrl}`;
 }
 
+function officialMiddlewareBaseUrl(publicApiUrl: string): string {
+  const parsed = new URL(publicApiUrl);
+  if (parsed.pathname.replace(/\/+$/, "") === "/api") {
+    parsed.pathname = "/";
+  }
+  return parsed.toString().replace(/\/$/, "");
+}
+
 function proofQuoteId(res: Response): string {
   const value = res.locals.proofQuoteId;
   if (typeof value !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
@@ -236,7 +244,9 @@ function liveMiddleware(
           },
         },
         {
-          ...(config.publicApiUrl ? { baseUrl: config.publicApiUrl } : {}),
+          ...(config.publicApiUrl
+            ? { baseUrl: officialMiddlewareBaseUrl(config.publicApiUrl) }
+            : {}),
           ...(config.facilitatorPrivateKey
             ? {
                 facilitator: {
