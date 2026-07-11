@@ -1,0 +1,38 @@
+[Unit]
+Description=Proofline match proof API
+After=network-online.target
+Wants=network-online.target
+StartLimitInterval=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=proofline
+Group=proofline
+WorkingDirectory=/opt/proofline/current
+EnvironmentFile=/opt/proofline/shared/api.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /opt/proofline/current/apps/api/dist/index.js
+Restart=on-failure
+RestartSec=3
+TimeoutStartSec=30
+TimeoutStopSec=20
+KillSignal=SIGTERM
+UMask=0077
+LimitNOFILE=8192
+
+# Directives below are supported by CentOS 7's systemd 219.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=proofline-api
+
+[Install]
+WantedBy=multi-user.target
