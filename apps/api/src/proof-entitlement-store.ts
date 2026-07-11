@@ -17,6 +17,7 @@ import type { X402PaymentIdentity } from "./x402-ledger.js";
 const BYTES32_PATTERN = /^0x[0-9a-fA-F]{64}$/;
 const ADDRESS_PATTERN = /^0x[0-9a-fA-F]{40}$/;
 const MAX_RECORDS = 256;
+const MAX_QUOTED_RECORDS = 128;
 const MAX_RECORD_BYTES = 512 * 1_024;
 
 export type ProofEntitlementStatus = "quoted" | "pending" | "settled";
@@ -40,6 +41,8 @@ export interface ProofEntitlementRecord {
   transactionHash?: `0x${string}`;
   settledAt?: string;
   deliveredAt?: string;
+  reissuedPacket?: unknown;
+  reissuedAt?: string;
 }
 
 export interface FreezeProofQuoteInput {
@@ -97,6 +100,97 @@ function validDate(value: unknown): value is string {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
+function frozenPacketSubject(
+  packet: unknown,
+): { matchId: string; eventId: string } | undefined {
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) {
+    return undefined;
+  }
+  const candidate = packet as Record<string, unknown>;
+  const match =
+    candidate.match &&
+    typeof candidate.match === "object" &&
+    !Array.isArray(candidate.match)
+      ? (candidate.match as Record<string, unknown>)
+      : undefined;
+  return typeof match?.id === "string" && typeof candidate.eventId === "string"
+    ? { matchId: match.id, eventId: candidate.eventId }
+    : undefined;
+}
+
+interface ReissueBinding {
+  packetHash: string;
+  matchId: string;
+  eventId: string;
+  evidenceRoot: string;
+  eventHash: string;
+  anchorTxHash: string | undefined;
+}
+
+function reissueBinding(packet: unknown): ReissueBinding | undefined {
+  if (!packet || typeof packet !== "object" || Array.isArray(packet)) {
+    return undefined;
+  }
+  const candidate = packet as Record<string, unknown>;
+  const subject = frozenPacketSubject(candidate);
+  const verification =
+    candidate.verification &&
+    typeof candidate.verification === "object" &&
+    !Array.isArray(candidate.verification)
+      ? (candidate.verification as Record<string, unknown>)
+      : undefined;
+  const canonical =
+    verification?.canonical &&
+    typeof verification.canonical === "object" &&
+    !Array.isArray(verification.canonical)
+      ? (verification.canonical as Record<string, unknown>)
+      : undefined;
+  const anchor =
+    candidate.anchor &&
+    typeof candidate.anchor === "object" &&
+    !Array.isArray(candidate.anchor)
+      ? (candidate.anchor as Record<string, unknown>)
+      : undefined;
+  const anchorTxHash = anchor?.txHash;
+  if (
+    !subject ||
+    typeof candidate.packetHash !== "string" ||
+    !BYTES32_PATTERN.test(candidate.packetHash) ||
+    typeof candidate.evidenceRoot !== "string" ||
+    !BYTES32_PATTERN.test(candidate.evidenceRoot) ||
+    typeof canonical?.eventHash !== "string" ||
+    !BYTES32_PATTERN.test(canonical.eventHash) ||
+    (anchorTxHash !== undefined &&
+      (typeof anchorTxHash !== "string" || !BYTES32_PATTERN.test(anchorTxHash)))
+  ) {
+    return undefined;
+  }
+  return {
+    packetHash: candidate.packetHash.toLowerCase(),
+    matchId: subject.matchId,
+    eventId: subject.eventId,
+    evidenceRoot: candidate.evidenceRoot.toLowerCase(),
+    eventHash: canonical.eventHash.toLowerCase(),
+    anchorTxHash:
+      typeof anchorTxHash === "string" ? anchorTxHash.toLowerCase() : undefined,
+  };
+}
+
+function validReissueBinding(original: unknown, replacement: unknown): boolean {
+  const originalBinding = reissueBinding(original);
+  const replacementBinding = reissueBinding(replacement);
+  return Boolean(
+    originalBinding &&
+      replacementBinding &&
+      originalBinding.packetHash !== replacementBinding.packetHash &&
+      originalBinding.matchId === replacementBinding.matchId &&
+      originalBinding.eventId === replacementBinding.eventId &&
+      originalBinding.evidenceRoot === replacementBinding.evidenceRoot &&
+      originalBinding.eventHash === replacementBinding.eventHash &&
+      originalBinding.anchorTxHash === replacementBinding.anchorTxHash,
+  );
+}
+
 function validRecord(value: unknown): value is ProofEntitlementRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Partial<ProofEntitlementRecord>;
@@ -127,6 +221,32 @@ function validRecord(value: unknown): value is ProofEntitlementRecord {
     packetHash.toLowerCase() !== record.packetHash.toLowerCase()
   ) {
     return false;
+  }
+  const hasReissuedPacket = record.reissuedPacket !== undefined;
+  const hasReissuedAt = record.reissuedAt !== undefined;
+  if (hasReissuedPacket !== hasReissuedAt) return false;
+  if (hasReissuedPacket) {
+    if (record.status !== "settled" || !validDate(record.reissuedAt)) {
+      return false;
+    }
+    try {
+      cloneJson(record.reissuedPacket, "reissued packet");
+    } catch {
+      return false;
+    }
+    const reissuedPacketHash =
+      record.reissuedPacket &&
+      typeof record.reissuedPacket === "object" &&
+      !Array.isArray(record.reissuedPacket)
+        ? (record.reissuedPacket as Record<string, unknown>).packetHash
+        : undefined;
+    if (
+      typeof reissuedPacketHash !== "string" ||
+      !BYTES32_PATTERN.test(reissuedPacketHash) ||
+      !validReissueBinding(record.packet, record.reissuedPacket)
+    ) {
+      return false;
+    }
   }
   if (record.status === "quoted") {
     return (
@@ -185,6 +305,9 @@ export class ProofEntitlementStore {
     const packetHash = input.packetHash.toLowerCase() as `0x${string}`;
     const packet = cloneJson(input.packet, "frozen packet");
     const quote = cloneJson(input.quote, "frozen quote");
+    const quotedAt = input.quotedAt ?? new Date();
+    const quotedAtIso = quotedAt.toISOString();
+    const expiresAtIso = input.expiresAt?.toISOString();
     const embeddedHash =
       packet && typeof packet === "object" && !Array.isArray(packet)
         ? (packet as Record<string, unknown>).packetHash
@@ -205,10 +328,8 @@ export class ProofEntitlementStore {
         const refreshed: ProofEntitlementRecord = {
           ...existing,
           quote,
-          quotedAt: (input.quotedAt ?? new Date()).toISOString(),
-          ...(input.expiresAt
-            ? { expiresAt: input.expiresAt.toISOString() }
-            : {}),
+          quotedAt: quotedAtIso,
+          ...(expiresAtIso ? { expiresAt: expiresAtIso } : {}),
         };
         this.records.set(key, refreshed);
         try {
@@ -221,23 +342,73 @@ export class ProofEntitlementStore {
       }
       return existing;
     }
-    if (this.records.size >= MAX_RECORDS) {
-      throw new Error("Proof entitlement store reached its safety limit");
-    }
     const record: ProofEntitlementRecord = {
       sessionId: input.sessionId,
       packetHash,
       packet,
       quote,
       status: "quoted",
-      quotedAt: (input.quotedAt ?? new Date()).toISOString(),
-      ...(input.expiresAt ? { expiresAt: input.expiresAt.toISOString() } : {}),
+      quotedAt: quotedAtIso,
+      ...(expiresAtIso ? { expiresAt: expiresAtIso } : {}),
     };
-    this.records.set(key, record);
+    const previousRecords = new Map(this.records);
+    const previousNonceIndex = new Map(this.nonceIndex);
+    const previousSignatureIndex = new Map(this.signatureIndex);
+    const restore = () => {
+      this.records.clear();
+      this.nonceIndex.clear();
+      this.signatureIndex.clear();
+      for (const [recordKey, value] of previousRecords) {
+        this.records.set(recordKey, value);
+      }
+      for (const [nonce, owner] of previousNonceIndex) {
+        this.nonceIndex.set(nonce, owner);
+      }
+      for (const [signature, owner] of previousSignatureIndex) {
+        this.signatureIndex.set(signature, owner);
+      }
+    };
     try {
+      const incomingSubject = frozenPacketSubject(packet);
+      for (const [candidateKey, candidate] of this.records) {
+        if (candidate.status !== "quoted") continue;
+        const expired = Boolean(
+          candidate.expiresAt &&
+            Date.parse(candidate.expiresAt) <= quotedAt.getTime(),
+        );
+        const candidateSubject = frozenPacketSubject(candidate.packet);
+        const sameSubject = Boolean(
+          incomingSubject &&
+            candidate.sessionId === input.sessionId &&
+            candidateSubject?.matchId === incomingSubject.matchId &&
+            candidateSubject.eventId === incomingSubject.eventId,
+        );
+        if (expired || sameSubject) this.records.delete(candidateKey);
+      }
+      const quotedByAge = [...this.records.entries()]
+        .filter(([, candidate]) => candidate.status === "quoted")
+        .sort(([leftKey, left], [rightKey, right]) => {
+          const byTime = Date.parse(left.quotedAt) - Date.parse(right.quotedAt);
+          return byTime || leftKey.localeCompare(rightKey);
+        });
+      let quotedCount = quotedByAge.length;
+      while (
+        quotedByAge.length > 0 &&
+        (quotedCount >= MAX_QUOTED_RECORDS ||
+          this.records.size >= MAX_RECORDS)
+      ) {
+        const oldest = quotedByAge.shift();
+        if (!oldest) break;
+        this.records.delete(oldest[0]);
+        quotedCount -= 1;
+      }
+      if (this.records.size >= MAX_RECORDS) {
+        throw new Error("Proof entitlement store reached its safety limit");
+      }
+      this.records.set(key, record);
       this.persist();
     } catch (error) {
-      this.records.delete(key);
+      restore();
       throw error;
     }
     return record;
@@ -359,6 +530,59 @@ export class ProofEntitlementStore {
     return delivered;
   }
 
+  markReissued(
+    sessionId: string,
+    originalPacketHash: `0x${string}`,
+    replacementPacket: unknown,
+    now = new Date(),
+  ): ProofEntitlementRecord {
+    if (!sessionId || !BYTES32_PATTERN.test(originalPacketHash)) {
+      throw new Error("Cannot reissue a proof without its original entitlement");
+    }
+    const key = quoteKey(sessionId, originalPacketHash);
+    const current = this.records.get(key);
+    if (!current || current.status !== "settled") {
+      throw new Error("Cannot reissue an unsettled proof entitlement");
+    }
+    const clonedReplacement = cloneJson(
+      replacementPacket,
+      "replacement proof packet",
+    );
+    const embeddedHash =
+      clonedReplacement &&
+      typeof clonedReplacement === "object" &&
+      !Array.isArray(clonedReplacement)
+        ? (clonedReplacement as Record<string, unknown>).packetHash
+        : undefined;
+    if (typeof embeddedHash !== "string" || !BYTES32_PATTERN.test(embeddedHash)) {
+      throw new Error("Replacement proof packet is missing a 32-byte packetHash");
+    }
+    if (!validReissueBinding(current.packet, clonedReplacement)) {
+      throw new Error(
+        "Replacement proof packet must have a new hash and preserve the original subject, evidence root, canonical event hash, and anchor transaction",
+      );
+    }
+    if (current.reissuedPacket !== undefined) {
+      if (JSON.stringify(current.reissuedPacket) !== JSON.stringify(clonedReplacement)) {
+        throw new Error("A reissued proof packet cannot be rebound to different JSON");
+      }
+      return current;
+    }
+    const reissued: ProofEntitlementRecord = {
+      ...current,
+      reissuedPacket: clonedReplacement,
+      reissuedAt: now.toISOString(),
+    };
+    this.records.set(key, reissued);
+    try {
+      this.persist();
+    } catch (error) {
+      this.records.set(key, current);
+      throw error;
+    }
+    return reissued;
+  }
+
   releaseVerifiedRejection(identity: X402PaymentIdentity): void {
     const key = quoteKey(identity.sessionId, identity.packetHash);
     const current = this.records.get(key);
@@ -427,6 +651,26 @@ export class ProofEntitlementStore {
 
   find(sessionId: string, packetHash: `0x${string}`): ProofEntitlementRecord | undefined {
     return this.records.get(quoteKey(sessionId, packetHash));
+  }
+
+  findSettledBySubject(
+    sessionId: string,
+    matchId: string,
+    eventId: string,
+  ): ProofEntitlementRecord | undefined {
+    let latest: ProofEntitlementRecord | undefined;
+    for (const record of this.records.values()) {
+      if (record.sessionId !== sessionId || record.status !== "settled") continue;
+      const subject = frozenPacketSubject(record.packet);
+      if (subject?.matchId !== matchId || subject.eventId !== eventId) continue;
+      if (
+        !latest ||
+        Date.parse(record.settledAt!) >= Date.parse(latest.settledAt!)
+      ) {
+        latest = record;
+      }
+    }
+    return latest;
   }
 
   private load(): void {

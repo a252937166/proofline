@@ -358,7 +358,7 @@ function liveMiddleware(
           return;
         }
         const record = decision.record;
-        res.locals.packet = record.packet;
+        res.locals.packet = record.reissuedPacket ?? record.packet;
         const payment: PaymentResult = {
           mode: "live",
           simulated: false,
@@ -655,7 +655,7 @@ export function createProofEntitlementRecoveryMiddleware(
       });
       return;
     }
-    res.locals.packet = record.packet;
+    res.locals.packet = record.reissuedPacket ?? record.packet;
     res.locals.proofQuoteId = record.packetHash;
     res.locals.proofEntitlementRecovered = true;
     res.locals.proofEntitlementQuote = record.quote;

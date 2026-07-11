@@ -3,7 +3,11 @@ import { privateKeyToAccount } from "viem/accounts";
 
 import { verifyProofPurchaseBinding } from "../../api/src/purchase-binding";
 import type { PaymentQuote } from "../src/types";
-import { createBrowserPaymentSignature } from "../src/lib/wallet";
+import {
+  completeBrowserPaymentSignature,
+  createBrowserPaymentAuthorization,
+  createBrowserPaymentSignature,
+} from "../src/lib/wallet";
 
 const PRIVATE_KEY = `0x${"12".repeat(32)}` as const;
 const ASSET = "0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d";
@@ -61,6 +65,82 @@ afterEach(() => {
 });
 
 describe("createBrowserPaymentSignature", () => {
+  it("waits for an explicit completion call before requesting the ProofPurchase signature", async () => {
+    const account = privateKeyToAccount(PRIVATE_KEY);
+    const primaryTypes: string[] = [];
+    installProvider(async ({ method, params }) => {
+      if (method === "eth_chainId") return "0x59f";
+      if (method === "eth_requestAccounts") return [account.address];
+      if (method === "eth_signTypedData_v4") {
+        const typedData = JSON.parse(String(params?.[1])) as {
+          domain: Record<string, unknown>;
+          types: Record<string, readonly { name: string; type: string }[]>;
+          primaryType: string;
+          message: Record<string, unknown>;
+        };
+        primaryTypes.push(typedData.primaryType);
+        const { EIP712Domain: _domainType, ...types } = typedData.types;
+        return account.signTypedData({
+          domain: typedData.domain,
+          types,
+          primaryType: typedData.primaryType,
+          message: typedData.message,
+        });
+      }
+      throw new Error(`Unexpected provider method: ${method}`);
+    });
+
+    const signingSteps: number[] = [];
+    const authorization = await createBrowserPaymentAuthorization({
+      quote: quote(),
+      sessionId: SESSION_ID,
+      expectedAsset: ASSET,
+      expectedPayee: PAYEE,
+      maximumAmount: "10000",
+      rpcUrl: "https://k8s.testnet.json-rpc.injective.network/",
+      explorerUrl: "https://testnet.blockscout.injective.network",
+      onSigningStep: (step) => signingSteps.push(step),
+    });
+
+    expect(primaryTypes).toEqual(["TransferWithAuthorization"]);
+    expect(signingSteps).toEqual([1]);
+
+    const payment = await completeBrowserPaymentSignature({
+      authorization,
+      onSigningStep: (step) => signingSteps.push(step),
+    });
+
+    expect(primaryTypes).toEqual(["TransferWithAuthorization", "ProofPurchase"]);
+    expect(signingSteps).toEqual([1, 2]);
+
+    const envelope = JSON.parse(Buffer.from(payment.header, "base64").toString("utf8")) as {
+      extensions: {
+        proofline: {
+          packetHash: string;
+          purchaseBinding: {
+            schema: string;
+            message: { packetHash: string; usdcNonce: string; sessionHash: string };
+          };
+        };
+      };
+    };
+    expect(envelope.extensions.proofline.packetHash).toBe(PACKET_HASH);
+    expect(envelope.extensions.proofline.purchaseBinding.message.packetHash).toBe(PACKET_HASH);
+    expect(envelope.extensions.proofline.purchaseBinding.message.usdcNonce).toBe(
+      authorization.nonce,
+    );
+
+    const verified = await verifyProofPurchaseBinding(payment.header, {
+      sessionId: SESSION_ID,
+      packetHash: PACKET_HASH,
+      payer: account.address,
+      payee: PAYEE,
+      amount: "10000",
+      usdcNonce: authorization.nonce as `0x${string}`,
+    });
+    expect(verified).toMatchObject({ valid: true });
+  });
+
   it("produces two wallet signatures in an envelope accepted by the API verifier", async () => {
     const account = privateKeyToAccount(PRIVATE_KEY);
     const primaryTypes: string[] = [];

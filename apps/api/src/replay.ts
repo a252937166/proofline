@@ -36,6 +36,7 @@ export class ReplayEngine {
   private anchors = new Map<string, AnchorRecord>();
   private processedFrameIds: string[] = [];
   private errors: ReplayError[] = [];
+  private proofPackets = new Map<string, Promise<ProofPacket>>();
   private lastFrame: ReplayFrame | null = null;
   private running = false;
   private applying = false;
@@ -105,6 +106,7 @@ export class ReplayEngine {
       this.anchors.clear();
       this.processedFrameIds = [];
       this.errors = [];
+      this.proofPackets.clear();
       this.lastFrame = null;
       this.revision += 1;
       const snapshot = this.snapshot();
@@ -201,23 +203,43 @@ export class ReplayEngine {
 
   async proofPacket(eventId: string): Promise<ProofPacket | null> {
     if (!this.eventIds().includes(eventId)) return null;
-    const observations = this.eventObservations(eventId);
+    const cached = this.proofPackets.get(eventId);
+    if (cached) return clone(await cached);
     const anchorRecord = this.anchors.get(eventId);
-    const anchor = anchorRecord?.receipt;
-    return buildProofPacket({
+
+    // Store the promise before signing so concurrent unsigned quote requests
+    // share one wall-clock issuance and one packet hash. The cache is cleared
+    // on every replay mutation, preserving frozen quote determinism without
+    // letting repeated GETs exhaust the durable entitlement store.
+    const packet = buildProofPacket({
       match: clone(this.match),
       eventId,
-      observations,
+      observations: this.eventObservations(eventId),
       issuerPrivateKey: this.issuerPrivateKey,
       ...(anchorRecord?.verification
         ? { verification: clone(anchorRecord.verification) }
         : {}),
-      ...(anchor ? { anchor: clone(anchor) } : {}),
-      now: new Date(this.replayTime()),
+      ...(anchorRecord?.receipt
+        ? { anchor: clone(anchorRecord.receipt) }
+        : {}),
+      // Verification stays frozen at the replay/anchor evidence time, while
+      // packet issuance is the real wall-clock signing time. Backdating the
+      // issuer signature to the replay made it precede the issuer key policy.
+      now: new Date(),
     });
+    this.proofPackets.set(eventId, packet);
+    try {
+      return clone(await packet);
+    } catch (error) {
+      if (this.proofPackets.get(eventId) === packet) {
+        this.proofPackets.delete(eventId);
+      }
+      throw error;
+    }
   }
 
   private async applyFrame(frame: ReplayFrame): Promise<void> {
+    this.proofPackets.clear();
     switch (frame.kind) {
       case "observe": {
         this.observations.push(clone(frame.observation));

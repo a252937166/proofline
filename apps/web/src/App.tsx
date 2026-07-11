@@ -13,7 +13,9 @@ import { CatalogMatchView, MatchCatalogBar } from "./components/MatchCatalog";
 import { useReplay, type ReplayAction } from "./hooks/useReplay";
 import { api, ApiError, PROOFLINE_SESSION_ID } from "./lib/api";
 import {
-  createBrowserPaymentSignature,
+  completeBrowserPaymentSignature,
+  createBrowserPaymentAuthorization,
+  type BrowserPaymentAuthorization,
   type BrowserSigningStep,
 } from "./lib/wallet";
 import type {
@@ -32,7 +34,19 @@ import type {
   VerificationResult,
 } from "./types";
 
-type DrawerStatus = "idle" | "preparing" | "quoting" | "quoted" | "paying" | "uncertain" | "recovering" | "paid" | "error";
+type DrawerStatus =
+  | "idle"
+  | "preparing"
+  | "quoting"
+  | "quoted"
+  | "authorizing"
+  | "binding-ready"
+  | "binding"
+  | "settling"
+  | "uncertain"
+  | "recovering"
+  | "paid"
+  | "error";
 
 interface ProofTarget {
   matchId: string;
@@ -675,6 +689,9 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
   // A live PAYMENT-SIGNATURE is deliberately ephemeral: it exists only in this
   // mounted drawer and is replayed for recovery without storage or logging.
   const paymentSignatureRef = useRef<string | null>(null);
+  // The first EIP-3009 signature is also memory-only. It is never submitted
+  // until a second, explicit user gesture completes the ProofPurchase binding.
+  const pendingAuthorizationRef = useRef<BrowserPaymentAuthorization | null>(null);
   const operationEpochRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
   const drawerActiveRef = useRef(open);
@@ -684,7 +701,14 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
   drawerActiveRef.current = open;
   onVerificationRef.current = onVerification;
   targetKeyRef.current = targetKey;
-  const closeLocked = status === "paying" || status === "recovering" || status === "uncertain";
+  const closeLocked = [
+    "authorizing",
+    "binding-ready",
+    "binding",
+    "settling",
+    "recovering",
+    "uncertain",
+  ].includes(status);
 
   const isCurrentOperation = (operation: DrawerOperation): boolean =>
     drawerActiveRef.current &&
@@ -706,6 +730,8 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
       setMessage(
         status === "uncertain"
           ? "Keep this panel open while the existing authorization is recovered or checked. Closing now would discard the only in-memory recovery handle."
+          : status === "binding-ready"
+            ? "Signature 1/2 is held in memory only. Complete Proof binding or use Discard authorization before closing. No payment has been submitted."
           : "A wallet or settlement request is in progress. Reject the wallet prompt or wait for its receipt before closing this panel.",
       );
       return;
@@ -715,6 +741,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     paymentSignatureRef.current = null;
+    pendingAuthorizationRef.current = null;
     setStatus("idle");
     setQuote(null);
     setProof(null);
@@ -744,6 +771,16 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
   }, [handleClose, open]);
 
   useEffect(() => {
+    if (!open || !closeLocked) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [closeLocked, open]);
+
+  useEffect(() => {
     operationEpochRef.current += 1;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
@@ -757,16 +794,69 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     setPaymentNonce(null);
     setSigningStep(null);
     paymentSignatureRef.current = null;
+    pendingAuthorizationRef.current = null;
     setTamperResult("idle");
     setMessage(null);
   }, [eventId, matchId, open]);
 
-  const requestQuote = async (preparedOperation?: DrawerOperation) => {
+  const acceptDeliveredProof = async (
+    result: ProofPacketResponse,
+    operation: DrawerOperation,
+    recovered = false,
+  ) => {
+    if (!isCurrentOperation(operation)) return;
+    setProof(result);
+    onProof(result);
+    setStatus("paid");
+    try {
+      const checked = await api.verifyProof(
+        result.packet,
+        operation.controller.signal,
+      );
+      if (!isCurrentOperation(operation)) return;
+      setVerification(checked);
+      onVerification(checked);
+      if (!checked.valid) {
+        setMessage("Report delivered and payment will not be repeated. Verification completed with a failed layer; inspect its evidence below.");
+      } else if (recovered) {
+        setMessage(
+          result.correction?.applied
+            ? "Recovered the existing settled report and corrected its legacy replay timestamp. No wallet opened, no facilitator was called, and no payment was repeated."
+            : "Recovered the existing settled report. No wallet opened, no facilitator was called, and no payment was repeated.",
+        );
+      }
+    } catch (cause) {
+      if (isAbortError(cause) || !isCurrentOperation(operation)) return;
+      setMessage(
+        `Report delivered; payment will not be repeated. Packet verification can be retried safely. ${
+          cause instanceof Error ? cause.message : ""
+        }`,
+      );
+    }
+  };
+
+  const requestQuote = async (
+    preparedOperation?: DrawerOperation,
+    skipRecovery = false,
+  ) => {
     const operation = preparedOperation ?? beginOperation();
     if (!isCurrentOperation(operation)) return;
     setStatus("quoting");
     setMessage(null);
     try {
+      if (!skipRecovery) {
+        const recovered = await api.recoverSettledProof(
+          matchId,
+          eventId,
+          operation.controller.signal,
+        );
+        if (!isCurrentOperation(operation)) return;
+        if (recovered) {
+          setQuote(null);
+          await acceptDeliveredProof(recovered, operation, true);
+          return;
+        }
+      }
       const response = await api.getProofQuote(
         matchId,
         eventId,
@@ -777,12 +867,21 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
         setQuote(response);
         setStatus("quoted");
       } else {
-        setProof(response);
-        onProof(response);
-        setStatus("paid");
+        await acceptDeliveredProof(response, operation);
       }
     } catch (cause) {
       if (isAbortError(cause) || !isCurrentOperation(operation)) return;
+      if (
+        cause instanceof ApiError &&
+        cause.body &&
+        typeof cause.body === "object" &&
+        "paymentState" in cause.body &&
+        cause.body.paymentState === "settled"
+      ) {
+        setStatus("error");
+        setMessage(`An existing payment is settled but its report could not be recovered safely. Do not sign or pay again. ${cause.message}`);
+        return;
+      }
       if (
         cause instanceof ApiError &&
         cause.body &&
@@ -804,11 +903,33 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     setStatus("preparing");
     setMessage(null);
     try {
+      const recovered = await api.recoverSettledProof(
+        matchId,
+        eventId,
+        operation.controller.signal,
+      );
+      if (!isCurrentOperation(operation)) return;
+      if (recovered) {
+        setQuote(null);
+        await acceptDeliveredProof(recovered, operation, true);
+        return;
+      }
       await onPrepareReplay(eventId, operation.controller.signal);
       if (!isCurrentOperation(operation)) return;
-      await requestQuote(operation);
+      await requestQuote(operation, true);
     } catch (cause) {
       if (isAbortError(cause) || !isCurrentOperation(operation)) return;
+      if (
+        cause instanceof ApiError &&
+        cause.body &&
+        typeof cause.body === "object" &&
+        "paymentState" in cause.body &&
+        cause.body.paymentState === "settled"
+      ) {
+        setStatus("error");
+        setMessage(`An existing payment is settled but its report could not be recovered safely. Do not sign or pay again. ${cause.message}`);
+        return;
+      }
       setStatus("idle");
       setMessage(
         `Evidence preparation stopped before payment. No wallet was opened. ${
@@ -818,49 +939,52 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     }
   };
 
-  const purchase = async () => {
-    if (!quote) return;
-    const operation = beginOperation();
-    setStatus("paying");
+  const deliverPayment = async (
+    operation: DrawerOperation,
+    paymentSignature: string,
+    liveAuthorizationCreated: boolean,
+  ) => {
+    if (!isCurrentOperation(operation)) return;
+    paymentSignatureRef.current = paymentSignature;
+    setStatus("settling");
     setSigningStep(null);
-    setMessage(null);
-    let liveAuthorizationCreated = false;
     let result: ProofPacketResponse;
     try {
-      let paymentSignature = quote.demoSignature;
-      if (!paymentSignature) {
-        if (!integrations) throw new Error("Integration policy is not loaded; payment signing is disabled.");
-        const browserPayment = await createBrowserPaymentSignature({
-          quote,
-          sessionId: PROOFLINE_SESSION_ID,
-          expectedAsset: integrations.x402.asset.address,
-          expectedPayee: integrations.x402.payTo,
-          maximumAmount: integrations.x402.priceAtomic,
-          rpcUrl: integrations.injective.publicRpcUrl,
-          explorerUrl: integrations.injective.explorerUrl,
-          onSigningStep: (step) => {
-            if (isCurrentOperation(operation)) setSigningStep(step);
-          },
-          isActive: () => isCurrentOperation(operation),
-        });
-        if (!isCurrentOperation(operation)) return;
-        setSigningStep(null);
-        paymentSignature = browserPayment.header;
-        liveAuthorizationCreated = true;
-        setWalletAccount(browserPayment.account);
-        setPaymentNonce(browserPayment.nonce);
-      }
-      if (!isCurrentOperation(operation)) return;
-      paymentSignatureRef.current = paymentSignature;
       result = await api.submitProofPayment(matchId, eventId, paymentSignature);
     } catch (cause) {
       if (isAbortError(cause) || !isCurrentOperation(operation)) return;
-      setSigningStep(null);
       if (cause instanceof ApiError && cause.status === 409) {
-        paymentSignatureRef.current = null;
-        setQuote(null);
-        setStatus("idle");
-        setMessage(`${cause.message} Request a fresh quote before signing again.`);
+        const body = cause.body && typeof cause.body === "object"
+          ? cause.body as Record<string, unknown>
+          : null;
+        const code = typeof body?.error === "string" ? body.error : "";
+        const paymentState = typeof body?.paymentState === "string"
+          ? body.paymentState
+          : "";
+        const definitelyNotSubmitted = new Set([
+          "proof_quote_missing_or_expired",
+          "proof_quote_anchor_mode_invalid",
+          "payment_identity_invalid",
+          "proof_purchase_binding_invalid",
+          "frozen_proof_entitlement_missing",
+        ]).has(code) && (
+          paymentState === "" ||
+          paymentState === "not-requested" ||
+          paymentState === "not-submitted"
+        );
+        if (definitelyNotSubmitted) {
+          paymentSignatureRef.current = null;
+          pendingAuthorizationRef.current = null;
+          setQuote(null);
+          setStatus("idle");
+          setMessage(`${cause.message} The server confirms no facilitator call was made; request a fresh quote before signing again.`);
+          return;
+        }
+        // 409 also covers already-pending or already-settled authorizations.
+        // Preserve the only in-memory recovery header and fail closed instead
+        // of inviting a second nonce/payment.
+        setStatus("uncertain");
+        setMessage(`The server reported a conflicting payment state. Do not sign again. Recover this exact in-memory authorization or inspect its receipt. ${cause.message}`);
         return;
       }
       setMessage(
@@ -874,28 +998,108 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
       return;
     }
 
-    onProof(result);
-    if (!isCurrentOperation(operation)) return;
-    setProof(result);
-    setSigningStep(null);
     paymentSignatureRef.current = null;
-    setStatus("paid");
+    pendingAuthorizationRef.current = null;
+    await acceptDeliveredProof(result, operation);
+  };
+
+  const startPaymentAuthorization = async () => {
+    if (!quote) return;
+    const operation = beginOperation();
+    setMessage(null);
+    setSigningStep(null);
+
+    if (quote.demoSignature) {
+      await deliverPayment(operation, quote.demoSignature, false);
+      return;
+    }
+    if (!integrations) {
+      setStatus("error");
+      setMessage("Integration policy is not loaded; payment signing is disabled.");
+      return;
+    }
+
+    setStatus("authorizing");
     try {
-      const checked = await api.verifyProof(
-        result.packet,
-        operation.controller.signal,
-      );
+      const authorization = await createBrowserPaymentAuthorization({
+        quote,
+        sessionId: PROOFLINE_SESSION_ID,
+        expectedAsset: integrations.x402.asset.address,
+        expectedPayee: integrations.x402.payTo,
+        maximumAmount: integrations.x402.priceAtomic,
+        rpcUrl: integrations.injective.publicRpcUrl,
+        explorerUrl: integrations.injective.explorerUrl,
+        onSigningStep: (step) => {
+          if (isCurrentOperation(operation)) setSigningStep(step);
+        },
+        isActive: () => isCurrentOperation(operation),
+      });
       if (!isCurrentOperation(operation)) return;
-      setVerification(checked);
-      onVerification(checked);
+      pendingAuthorizationRef.current = authorization;
+      setWalletAccount(authorization.account);
+      setPaymentNonce(authorization.nonce);
+      setSigningStep(null);
+      setStatus("binding-ready");
     } catch (cause) {
       if (isAbortError(cause) || !isCurrentOperation(operation)) return;
+      setSigningStep(null);
+      setStatus("quoted");
+      setMessage(cause instanceof Error ? cause.message : "The USDC authorization was not signed.");
+    }
+  };
+
+  const completeProofBinding = async () => {
+    const pending = pendingAuthorizationRef.current;
+    if (!pending) {
+      setStatus("quoted");
+      setMessage("The first authorization is no longer available. Start again from signature 1/2; no payment was submitted.");
+      return;
+    }
+    const operation = beginOperation();
+    setStatus("binding");
+    setSigningStep(2);
+    setMessage(null);
+    try {
+      // This function is called directly from the second button click so OKX
+      // receives a fresh browser user gesture and surfaces its confirmation.
+      const payment = await completeBrowserPaymentSignature({
+        authorization: pending,
+        onSigningStep: (step) => {
+          if (isCurrentOperation(operation)) setSigningStep(step);
+        },
+        isActive: () => isCurrentOperation(operation),
+      });
+      if (!isCurrentOperation(operation)) return;
+      pendingAuthorizationRef.current = null;
+      setWalletAccount(payment.account);
+      setPaymentNonce(payment.nonce);
+      await deliverPayment(operation, payment.header, true);
+    } catch (cause) {
+      if (isAbortError(cause) || !isCurrentOperation(operation)) return;
+      setSigningStep(null);
+      if (cause instanceof Error && cause.message.includes("expired")) {
+        pendingAuthorizationRef.current = null;
+        setStatus("quoted");
+      } else {
+        setStatus("binding-ready");
+      }
       setMessage(
-        `Report delivered; payment will not be repeated. Packet verification can be retried safely. ${
-          cause instanceof Error ? cause.message : ""
-        }`,
+        `${cause instanceof Error ? cause.message : "The Proof binding was not signed."} No PAYMENT-SIGNATURE was submitted and no payment was attempted.`,
       );
     }
+  };
+
+  const discardPendingAuthorization = () => {
+    operationEpochRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    pendingAuthorizationRef.current = null;
+    paymentSignatureRef.current = null;
+    setSigningStep(null);
+    setWalletAccount(null);
+    setPaymentNonce(null);
+    setStatus("quoted");
+    setMessage("The first authorization was discarded in memory. No payment request was sent.");
   };
 
   const retryVerification = async () => {
@@ -999,6 +1203,20 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     )),
   );
   const paymentConfigurationReady = isSandbox || livePaymentUsable;
+  const firstSignatureComplete = [
+    "binding-ready",
+    "binding",
+    "settling",
+    "uncertain",
+    "recovering",
+    "paid",
+  ].includes(status);
+  const secondSignatureComplete = [
+    "settling",
+    "uncertain",
+    "recovering",
+    "paid",
+  ].includes(status);
   const showReplayPreflight = Boolean(
     replayTarget &&
     (status === "preparing" || (status === "idle" && !replayReady)),
@@ -1024,7 +1242,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
         <div className="payment-flow" aria-label="x402 payment flow">
           <span className={status === "idle" || status === "preparing" || status === "quoting" ? "active" : "complete"}><i>1</i><b>Request</b><small>GET proof</small></span>
           <Icon name="arrow" />
-          <span className={status === "quoted" || status === "paying" || status === "uncertain" || status === "recovering" || status === "paid" ? "active" : ""}><i>2</i><b>402 quote</b><small>Inspect terms</small></span>
+          <span className={["quoted", "authorizing", "binding-ready", "binding", "settling", "uncertain", "recovering", "paid"].includes(status) ? "active" : ""}><i>2</i><b>402 quote</b><small>Inspect terms</small></span>
           <Icon name="arrow" />
           <span className={status === "paid" ? "complete" : ""}><i>3</i><b>Report</b><small>Verify hash</small></span>
         </div>
@@ -1065,12 +1283,23 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
               <div className="signature-sequence" data-testid="signature-sequence">
                 <span>2 signatures · 1 payment</span>
                 <ol>
-                  <li className={signingStep === 1 ? "active" : ""}><i>01</i><p><b>USDC authorization</b><small>Authorizes the single 0.01 test USDC transfer.</small></p></li>
-                  <li className={signingStep === 2 ? "active" : ""}><i>02</i><p><b>Proof binding</b><small>Binds this report and session. It does not authorize another transfer.</small></p></li>
+                  <li className={signingStep === 1 ? "active" : firstSignatureComplete ? "done" : ""}><i>01</i><p><b>USDC authorization</b><small>{firstSignatureComplete ? "Confirmed · held in memory" : "Authorizes the single 0.01 test USDC transfer."}</small></p></li>
+                  <li className={signingStep === 2 ? "active" : secondSignatureComplete ? "done" : status === "binding-ready" ? "ready" : ""}><i>02</i><p><b>Proof binding</b><small>{secondSignatureComplete ? "Confirmed · report bound" : "Binds this report and session. It does not authorize another transfer."}</small></p></li>
                 </ol>
               </div>
             )}
-            {(status === "quoted" || status === "paying" || status === "error") && <button type="button" className="amber-button" onClick={() => void purchase()} disabled={status === "paying"} data-testid="submit-proof-payment">{status === "paying" ? (isSandbox ? "Settling sandbox receipt…" : signingStep === 1 ? "Confirm 1/2 · USDC authorization" : signingStep === 2 ? "Confirm 2/2 · Proof binding" : "Opening wallet…") : isSandbox ? "Run sandbox settlement" : "Connect wallet · sign 2 messages"}<Icon name="arrow" /></button>}
+            {(status === "quoted" || status === "authorizing" || status === "settling" || status === "error") && <button type="button" className="amber-button" onClick={() => void startPaymentAuthorization()} disabled={status === "authorizing" || status === "settling"} data-testid="submit-proof-payment">{status === "authorizing" ? "Confirm 1/2 · USDC authorization" : status === "settling" ? (isSandbox ? "Settling sandbox receipt…" : "Submitting one bound payment…") : isSandbox ? "Run sandbox settlement" : "Open wallet · sign authorization 1/2"}<Icon name="arrow" /></button>}
+          </section>
+        )}
+
+        {!isSandbox && (status === "binding-ready" || status === "binding") && (
+          <section className={`proof-binding-handoff ${status === "binding" ? "is-waiting" : ""}`} data-testid="proof-binding-handoff" role="status">
+            <div className="binding-latch" aria-hidden="true"><span>01</span><i /><span>02</span></div>
+            <p className="eyebrow">Signature 1/2 confirmed · no payment sent</p>
+            <h3>Open OKX for Proof binding</h3>
+            <p>Click the amber button below. This fresh click lets Chrome surface the second OKX confirmation instead of leaving it hidden in the extension. Proof binding names this report and does not authorize another transfer.</p>
+            <button type="button" className="amber-button" onClick={() => void completeProofBinding()} disabled={status === "binding"} data-testid="submit-proof-binding">{status === "binding" ? "Waiting for OKX confirmation…" : "Open OKX · sign Proof binding 2/2"}<Icon name="arrow" /></button>
+            <button type="button" className="binding-discard" onClick={discardPendingAuthorization} disabled={status === "binding"} data-testid="discard-payment-authorization">Discard authorization · submit nothing</button>
           </section>
         )}
 
@@ -1121,7 +1350,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
           </section>
         )}
 
-        {message && <div className="drawer-error" role="alert">{message}</div>}
+        {message && <div className={status === "binding-ready" || (status === "paid" && verification?.valid) ? "drawer-notice" : "drawer-error"} role="alert">{message}</div>}
         <footer><Icon name="wallet" /><p>Proofline never embeds a payer private key. Live mode validates the quoted network, asset, payee and spend cap before requesting an EIP-3009 signature from the connected wallet.</p></footer>
       </aside>
     </div>

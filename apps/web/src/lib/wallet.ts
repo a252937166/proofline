@@ -38,6 +38,36 @@ export interface BrowserPayment {
   requirement: X402Requirement;
 }
 
+interface TransferAuthorization {
+  from: string;
+  to: string;
+  value: string;
+  validAfter: string;
+  validBefore: string;
+  nonce: string;
+}
+
+interface ProofPurchaseMessage {
+  packetHash: `0x${string}`;
+  payer: string;
+  payee: string;
+  amount: string;
+  deadline: string;
+  usdcNonce: string;
+  sessionHash: `0x${string}`;
+}
+
+export interface BrowserPaymentAuthorization {
+  account: string;
+  nonce: string;
+  requirement: X402Requirement;
+  packetHash: `0x${string}`;
+  authorization: TransferAuthorization;
+  transferSignature: string;
+  purchaseMessage: ProofPurchaseMessage;
+  purchaseTypedData: Record<string, unknown>;
+}
+
 export type BrowserSigningStep = 1 | 2;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -155,7 +185,7 @@ async function ensureInjectiveTestnet(
   }
 }
 
-export async function createBrowserPaymentSignature(options: {
+interface BrowserPaymentOptions {
   quote: PaymentQuote;
   sessionId: string;
   expectedAsset: string;
@@ -165,12 +195,18 @@ export async function createBrowserPaymentSignature(options: {
   explorerUrl: string;
   onSigningStep?: (step: BrowserSigningStep) => void;
   isActive?: () => boolean;
-}): Promise<BrowserPayment> {
-  const assertActive = () => {
-    if (options.isActive?.() === false) {
-      throw new DOMException("The payment flow was canceled before submission.", "AbortError");
-    }
-  };
+}
+
+function assertPaymentActive(isActive?: () => boolean): void {
+  if (isActive?.() === false) {
+    throw new DOMException("The payment flow was canceled before submission.", "AbortError");
+  }
+}
+
+export async function createBrowserPaymentAuthorization(
+  options: BrowserPaymentOptions,
+): Promise<BrowserPaymentAuthorization> {
+  const assertActive = () => assertPaymentActive(options.isActive);
   assertActive();
   const provider = window.ethereum;
   if (!provider) {
@@ -284,7 +320,7 @@ export async function createBrowserPaymentSignature(options: {
       stringToHex(`proofline.purchase.session.v1:${options.sessionId}`),
     ),
   };
-  const purchaseTypedData = {
+  const purchaseTypedData: Record<string, unknown> = {
     types: {
       EIP712Domain: [
         { name: "name", type: "string" },
@@ -312,13 +348,44 @@ export async function createBrowserPaymentSignature(options: {
     message: purchaseMessage,
   };
 
+  return {
+    account,
+    nonce: authorization.nonce,
+    requirement,
+    packetHash,
+    authorization,
+    transferSignature: signature,
+    purchaseMessage,
+    purchaseTypedData,
+  };
+}
+
+export async function completeBrowserPaymentSignature(options: {
+  authorization: BrowserPaymentAuthorization;
+  onSigningStep?: (step: BrowserSigningStep) => void;
+  isActive?: () => boolean;
+}): Promise<BrowserPayment> {
+  assertPaymentActive(options.isActive);
+  const provider = window.ethereum;
+  if (!provider) {
+    throw new Error("No browser wallet was detected. Unlock OKX Wallet or MetaMask, then retry the proof binding.");
+  }
+  const pending = options.authorization;
+  const validBefore = Number(pending.authorization.validBefore);
+  if (!Number.isFinite(validBefore) || validBefore <= Math.floor(Date.now() / 1_000) + 5) {
+    throw new Error("The USDC authorization expired before proof binding. Discard it and request a fresh quote.");
+  }
+
+  // This provider call must be the first awaited operation after the user's
+  // explicit second click. OKX otherwise queues the signature inside the
+  // extension without surfacing its confirmation window.
   options.onSigningStep?.(2);
-  assertActive();
+  assertPaymentActive(options.isActive);
   const purchaseSignature = await provider.request({
     method: "eth_signTypedData_v4",
-    params: [account, JSON.stringify(purchaseTypedData)],
+    params: [pending.account, JSON.stringify(pending.purchaseTypedData)],
   });
-  assertActive();
+  assertPaymentActive(options.isActive);
   if (
     typeof purchaseSignature !== "string" ||
     !SIGNATURE_PATTERN.test(purchaseSignature)
@@ -327,23 +394,39 @@ export async function createBrowserPaymentSignature(options: {
   }
 
   return {
-    account,
-    nonce: authorization.nonce,
-    requirement,
+    account: pending.account,
+    nonce: pending.nonce,
+    requirement: pending.requirement,
     header: encodeBase64({
       x402Version: 2,
-      accepted: requirement,
-      payload: { signature, authorization },
+      accepted: pending.requirement,
+      payload: {
+        signature: pending.transferSignature,
+        authorization: pending.authorization,
+      },
       extensions: {
         proofline: {
-          packetHash,
+          packetHash: pending.packetHash,
           purchaseBinding: {
             schema: PROOF_PURCHASE_SCHEMA,
-            message: purchaseMessage,
+            message: pending.purchaseMessage,
             signature: purchaseSignature,
           },
         },
       },
     }),
   };
+}
+
+export async function createBrowserPaymentSignature(
+  options: BrowserPaymentOptions,
+): Promise<BrowserPayment> {
+  const authorization = await createBrowserPaymentAuthorization(options);
+  return completeBrowserPaymentSignature({
+    authorization,
+    ...(options.onSigningStep
+      ? { onSigningStep: options.onSigningStep }
+      : {}),
+    ...(options.isActive ? { isActive: options.isActive } : {}),
+  });
 }

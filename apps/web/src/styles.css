@@ -2515,6 +2515,22 @@ a {
   animation: flow-step-engage 380ms var(--ease-broadcast) both;
 }
 
+.signature-sequence li.done {
+  color: #dffbfa;
+  border-color: rgba(53, 196, 216, 0.72);
+  background: rgba(53, 196, 216, 0.1);
+}
+
+.signature-sequence li.done i {
+  color: var(--cyan);
+}
+
+.signature-sequence li.ready {
+  color: #fff3d2;
+  border-color: var(--amber);
+  background: rgba(246, 183, 60, 0.06);
+}
+
 .signature-sequence i {
   color: var(--amber);
   font-family: var(--mono);
@@ -2541,6 +2557,128 @@ a {
   color: #789098;
   font-size: 8px;
   line-height: 1.35;
+}
+
+.proof-binding-handoff {
+  margin: 12px 24px 0;
+  padding: 18px 20px 20px;
+  overflow: hidden;
+  position: relative;
+  color: #dce8e8;
+  border: 1px solid var(--amber);
+  background:
+    linear-gradient(120deg, rgba(246, 183, 60, 0.12), transparent 42%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 34px),
+    #0a2231;
+  animation: panel-decode 420ms var(--ease-broadcast) both;
+}
+
+.proof-binding-handoff::after {
+  content: "USER GESTURE REQUIRED";
+  position: absolute;
+  top: 12px;
+  right: -31px;
+  width: 132px;
+  padding: 4px 0;
+  transform: rotate(36deg);
+  color: var(--night);
+  background: var(--amber);
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 700;
+  text-align: center;
+  letter-spacing: 0.06em;
+}
+
+.binding-latch {
+  width: min(250px, calc(100% - 76px));
+  margin: 0 0 15px;
+  display: grid;
+  grid-template-columns: 24px minmax(60px, 1fr) 24px;
+  align-items: center;
+  gap: 8px;
+}
+
+.binding-latch span {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  color: var(--night);
+  background: var(--cyan);
+  border-radius: 50%;
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.binding-latch span:last-child {
+  background: var(--amber);
+}
+
+.binding-latch i {
+  height: 2px;
+  overflow: hidden;
+  position: relative;
+  background: linear-gradient(90deg, var(--cyan), var(--amber));
+}
+
+.binding-latch i::after {
+  content: "";
+  width: 28px;
+  height: 100%;
+  position: absolute;
+  left: -28px;
+  background: #f7ffff;
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.8);
+  animation: binding-handoff 1.4s var(--ease-broadcast) infinite;
+}
+
+.proof-binding-handoff .eyebrow {
+  margin: 0 0 5px;
+  color: var(--cyan);
+}
+
+.proof-binding-handoff h3 {
+  margin: 0;
+  font-family: var(--display);
+  font-size: 22px;
+  text-transform: uppercase;
+}
+
+.proof-binding-handoff > p:not(.eyebrow) {
+  max-width: 540px;
+  margin: 8px 0 16px;
+  color: #9eb3b7;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.proof-binding-handoff.is-waiting {
+  background:
+    linear-gradient(120deg, rgba(246, 183, 60, 0.17), transparent 48%),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 34px),
+    #0a2231;
+}
+
+.binding-discard {
+  width: 100%;
+  margin-top: 9px;
+  padding: 9px 12px;
+  color: #89a1a6;
+  border: 1px solid #41575f;
+  background: transparent;
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.binding-discard:hover:not(:disabled) {
+  color: #dce8e8;
+  border-color: #789097;
+}
+
+@keyframes binding-handoff {
+  to { left: calc(100% + 28px); }
 }
 
 .packet-seal {
@@ -2647,6 +2785,16 @@ a {
   color: #ffd0cb;
   border: 1px solid #994b51;
   background: rgba(220, 76, 76, 0.13);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.drawer-notice {
+  margin: 12px 24px 0;
+  padding: 12px;
+  color: #ffe9b5;
+  border: 1px solid rgba(246, 183, 60, 0.72);
+  background: rgba(246, 183, 60, 0.1);
   font-size: 10px;
   line-height: 1.45;
 }
@@ -3443,7 +3591,11 @@ a {
   .drawer-action,
   .proof-preflight,
   .quote-sheet,
-  .proof-packet {
+  .proof-packet,
+  .proof-binding-handoff,
+  .payment-uncertain,
+  .drawer-error,
+  .drawer-notice {
     margin-left: 16px;
     margin-right: 16px;
     padding: 17px;
@@ -3466,6 +3618,10 @@ a {
 }
 
 @media (max-width: 420px) {
+  .signature-sequence ol {
+    grid-template-columns: 1fr;
+  }
+
   .mode-lockup small {
     display: none;
   }

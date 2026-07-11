@@ -340,7 +340,7 @@ describe("Proofline API", () => {
       });
   });
 
-  it("keeps identical frozen packet hashes isolated by session", async () => {
+  it("keeps each frozen quote bound to its own session packet", async () => {
     const active = boot();
     const sessions = ["quote_session_alpha", "quote_session_beta"];
     for (const session of sessions) {
@@ -360,9 +360,6 @@ describe("Proofline API", () => {
           .expect(402),
       ),
     );
-    expect(quotes[0]!.body.proofPacketHash).toBe(
-      quotes[1]!.body.proofPacketHash,
-    );
 
     for (let index = 0; index < sessions.length; index += 1) {
       await request(active.app)
@@ -379,6 +376,63 @@ describe("Proofline API", () => {
           );
         });
     }
+  });
+
+  it("uses wall-clock issuance for historical replay evidence after issuer activation", async () => {
+    const issuerValidFrom = "2026-07-11T12:49:03.353Z";
+    const active = boot(
+      {
+        NODE_ENV: "test",
+        PROOFLINE_ISSUER_PRIVATE_KEY: ISSUER_PRIVATE_KEY,
+        PROOFLINE_ISSUER_VALID_FROM: issuerValidFrom,
+        ...TESTNET_ANCHOR_ENV,
+      },
+      testnetAnchorService(),
+    );
+    await finishReplay(active);
+
+    const proofUrl = `/api/matches/${MATCH_ID}/proof?eventId=final-result`;
+    const quote = await request(active.app).get(proofUrl).expect(402);
+    const paid = await request(active.app)
+      .get(proofUrl)
+      .set("PAYMENT-SIGNATURE", quote.body.demoSandbox.paymentSignature)
+      .expect(200);
+    const packet = paid.body.packet as {
+      generatedAt: string;
+      issuedAt: string;
+      verification: { verifiedAt: string };
+    };
+
+    expect(Date.parse(packet.verification.verifiedAt)).toBeLessThan(
+      Date.parse(issuerValidFrom),
+    );
+    expect(packet.issuedAt).toBe(packet.generatedAt);
+    expect(Date.parse(packet.issuedAt)).toBeGreaterThanOrEqual(
+      Date.parse(issuerValidFrom),
+    );
+    expect(Date.parse(packet.issuedAt)).toBeGreaterThan(
+      Date.parse(packet.verification.verifiedAt),
+    );
+
+    const verified = await request(active.app)
+      .post("/api/proofs/verify")
+      .send({ packet: paid.body.packet })
+      .expect(200);
+    expect(verified.body).toMatchObject({
+      valid: true,
+      integrity: { valid: true },
+      signature: {
+        valid: true,
+        cryptographicValid: true,
+        trustedIssuer: true,
+        trustSource: "current",
+      },
+      onchain: {
+        checked: true,
+        valid: true,
+        mode: "injective-testnet",
+      },
+    });
   });
 
   it("never returns live provider secrets from integration readiness", async () => {
@@ -560,6 +614,8 @@ describe("Proofline API", () => {
     expect(paid.body.quote).toEqual({
       packetHash: required.body.proofPacketHash,
       frozen: true,
+      paidPacketHash: required.body.proofPacketHash,
+      replacementPacketHash: required.body.proofPacketHash,
     });
 
     const verified = await request(active.app)
@@ -1319,6 +1375,48 @@ describe("Proofline API", () => {
       .expect(429)
       .expect((response) => {
         expect(response.headers["retry-after"]).toBe("60");
+      });
+  });
+
+  it("isolates recovery rate limits by the client IP supplied by loopback Nginx", async () => {
+    const active = boot();
+    const body = { matchId: MATCH_ID, eventId: "final-result" };
+    const session = `web_${"a".repeat(32)}`;
+    for (let index = 0; index < 12; index += 1) {
+      await request(active.app)
+        .post("/api/proofs/recover")
+        .set("X-Forwarded-For", "198.51.100.10")
+        .set("X-Proofline-Session", session)
+        .send(body)
+        .expect(404);
+    }
+    await request(active.app)
+      .post("/api/proofs/recover")
+      .set("X-Forwarded-For", "198.51.100.10")
+      .set("X-Proofline-Session", session)
+      .send(body)
+      .expect(429);
+    await request(active.app)
+      .post("/api/proofs/recover")
+      .set("X-Forwarded-For", "198.51.100.11")
+      .set("X-Proofline-Session", session)
+      .send(body)
+      .expect(404);
+  });
+
+  it("rate-limits unsigned proof quotes before they can exhaust durable slots", async () => {
+    const active = boot();
+    await finishReplay(active);
+    const proofUrl = `/api/matches/${MATCH_ID}/proof?eventId=final-result`;
+    for (let index = 0; index < 48; index += 1) {
+      await request(active.app).get(proofUrl).expect(402);
+    }
+    await request(active.app)
+      .get(proofUrl)
+      .expect(429)
+      .expect((response) => {
+        expect(response.headers["retry-after"]).toBe("300");
+        expect(response.body.error).toBe("proof_quote_rate_limited");
       });
   });
 });
