@@ -362,6 +362,20 @@ export interface ProofPacketResponse {
   quote: {
     packetHash: `0x${string}`;
     frozen: true;
+    paidPacketHash?: `0x${string}`;
+    replacementPacketHash?: `0x${string}`;
+  };
+  entitlement?: {
+    status: "settled";
+    paidPacketHash: `0x${string}`;
+    transactionHash?: `0x${string}`;
+  };
+  correction?: {
+    applied: boolean;
+    reason?: "replay-clock-before-issuer-valid-from";
+    replacementPacketHash?: `0x${string}`;
+    evidenceRootUnchanged?: boolean;
+    anchorTransactionUnchanged?: boolean;
   };
   provenance: unknown;
 }

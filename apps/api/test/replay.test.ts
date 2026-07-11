@@ -140,4 +140,46 @@ describe("ReplayEngine timing", () => {
     expect(runtime.engine.snapshot().replay.cursor).toBe(1);
     expect(runtime.engine.snapshot().replay.processedFrameIds).toHaveLength(1);
   });
+
+  it("freezes serial and concurrent proof quotes until replay state mutates", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime("2026-07-12T08:00:00.000Z");
+    runtime = createApi({ env: { NODE_ENV: "test" } });
+
+    await runtime.engine.step();
+    const concurrent = await Promise.all(
+      Array.from({ length: 4 }, () => runtime!.engine.proofPacket("kickoff")),
+    );
+    const first = concurrent[0];
+    expect(first).not.toBeNull();
+    for (const packet of concurrent) {
+      expect(packet).toMatchObject({
+        packetHash: first!.packetHash,
+        issuedAt: first!.issuedAt,
+      });
+    }
+
+    vi.setSystemTime("2026-07-12T08:01:00.000Z");
+    const serial = await runtime.engine.proofPacket("kickoff");
+    expect(serial).toMatchObject({
+      packetHash: first!.packetHash,
+      issuedAt: first!.issuedAt,
+    });
+
+    await runtime.engine.step();
+    const afterFrameMutation = await runtime.engine.proofPacket("kickoff");
+    expect(afterFrameMutation).toMatchObject({
+      issuedAt: "2026-07-12T08:01:00.000Z",
+    });
+    expect(afterFrameMutation?.packetHash).not.toBe(first!.packetHash);
+
+    vi.setSystemTime("2026-07-12T08:02:00.000Z");
+    await runtime.engine.reset();
+    await runtime.engine.step();
+    const afterReset = await runtime.engine.proofPacket("kickoff");
+    expect(afterReset).toMatchObject({
+      issuedAt: "2026-07-12T08:02:00.000Z",
+    });
+    expect(afterReset?.packetHash).not.toBe(first!.packetHash);
+  });
 });
