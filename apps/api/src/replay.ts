@@ -1,6 +1,7 @@
 import {
   buildProofPacket,
   decideSettlement,
+  evidenceRoot,
   verifyEvent,
   type EventObservation,
   type ProofPacket,
@@ -8,6 +9,7 @@ import {
   type ReplayFrame,
   type ReplayMatch,
 } from "@proofline/core";
+import type { Hex } from "viem";
 
 import type {
   AnchorRecord,
@@ -44,6 +46,7 @@ export class ReplayEngine {
   constructor(
     private readonly dataset: ReplayDataset,
     private readonly anchorService: AnchorService,
+    private readonly issuerPrivateKey: Hex,
     readonly intervalMs = 650,
   ) {
     this.match = clone(dataset.match);
@@ -181,14 +184,19 @@ export class ReplayEngine {
     return this.event(eventId);
   }
 
-  proofPacket(eventId: string): ProofPacket | null {
+  async proofPacket(eventId: string): Promise<ProofPacket | null> {
     if (!this.eventIds().includes(eventId)) return null;
     const observations = this.eventObservations(eventId);
-    const anchor = this.anchors.get(eventId)?.receipt;
+    const anchorRecord = this.anchors.get(eventId);
+    const anchor = anchorRecord?.receipt;
     return buildProofPacket({
       match: clone(this.match),
       eventId,
       observations,
+      issuerPrivateKey: this.issuerPrivateKey,
+      ...(anchorRecord?.verification
+        ? { verification: clone(anchorRecord.verification) }
+        : {}),
       ...(anchor ? { anchor: clone(anchor) } : {}),
       now: new Date(this.replayTime()),
     });
@@ -230,7 +238,7 @@ export class ReplayEngine {
         this.match.score = clone(frame.score);
         return;
       case "anchor": {
-        const verification = this.verify(frame.eventId);
+        const verification = this.verify(frame.eventId, frame.atMs);
         if (verification.state !== "verified") {
           throw new Error(
             `Refusing to anchor ${frame.eventId}: verification state is ${verification.state}`,
@@ -239,9 +247,18 @@ export class ReplayEngine {
         const record = await this.anchorService.anchor({
           matchId: this.match.id,
           verification,
+          evidenceRoot: evidenceRoot({
+            match: clone(this.match),
+            eventId: frame.eventId,
+            observations: this.eventObservations(frame.eventId),
+            verification,
+          }),
           anchoredAt: this.replayTime(frame.atMs),
         });
-        this.anchors.set(frame.eventId, record);
+        this.anchors.set(frame.eventId, {
+          ...record,
+          verification: clone(verification),
+        });
       }
     }
   }
@@ -258,9 +275,9 @@ export class ReplayEngine {
       .map(clone);
   }
 
-  private verify(eventId: string) {
+  private verify(eventId: string, explicitAtMs?: number) {
     return verifyEvent(eventId, this.eventObservations(eventId), {
-      now: new Date(this.replayTime()),
+      now: new Date(this.replayTime(explicitAtMs)),
     });
   }
 

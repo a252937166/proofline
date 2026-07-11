@@ -37,7 +37,7 @@ Every click advances the same engine used by the API and MCP server.
 | Stage | Evidence state | Product behavior |
 | --- | --- | --- |
 | One red-card report | `observed` | Display with “awaiting corroboration”; hold action |
-| Synthetic feed says yellow | `contested` | Pull confidence rail back; show `card` conflict |
+| Synthetic feed says yellow | `contested` | Pull Evidence Score rail back; show `card` conflict |
 | Official report says red | `contested` | Preserve all active claims; do not majority-hide conflict |
 | Bad claim retracted | `verified` | Recover deterministically; keep correction history |
 | Match reaches 0–2 full time | `verified` | Build final-result packet |
@@ -74,7 +74,8 @@ Each observation contains a normalized event payload and an attributed source:
 VARA canonicalizes Unicode, whitespace, casing, optional fields, timestamps,
 and score structure before Keccak-256 hashing. Candidate events are ranked by
 the strongest source in each independent provenance group—not by raw provider
-count. Confidence exposes five basis-point components:
+count. Repeating a provider does not increase ranking weight, quorum, agreement,
+or reliability. Evidence Score exposes five basis-point components:
 
 - source reliability;
 - independent-source quorum;
@@ -82,7 +83,8 @@ count. Confidence exposes five basis-point components:
 - evidence freshness;
 - active-conflict penalty.
 
-The state machine is stricter than the number: fewer than two independent
+Evidence Score is a deterministic policy score, not a probability that an
+event is true. The state machine is stricter than the number: fewer than two independent
 groups remains `observed`, and any material active conflict is `contested` even
 if one candidate has more votes.
 
@@ -92,57 +94,63 @@ The paid resource is not a licensed raw feed. It is the verification work:
 
 - attributed normalized observations and retractions;
 - selected canonical JSON and event hash;
-- confidence inputs, threshold, and reasons;
+- Evidence Score inputs, threshold, and reasons;
 - current settlement decision;
 - Injective receipt when configured;
 - algorithm/schema versions;
 - a stable packet hash.
 
-An independent verifier rebuilds the canonical event, confidence, conflict set,
-settlement gate, and packet hash. A one-field mutation fails verification.
+An independent verifier rebuilds the canonical event, Evidence Score, conflict
+set, settlement gate, evidence root, and packet hash. It then recovers the
+EIP-712 signer and checks it against a trusted-issuer allowlist, followed by a
+fresh latest-revision registry read. A one-field mutation fails integrity, an
+unknown self-signer fails issuer trust, and a superseded revision fails the
+on-chain layer.
 
 ## Injective-native product loop
 
-1. `MatchProofRegistry` appends compact decision commitments and links every
-   revision to its predecessor.
+1. The fully verified `MatchProofRegistry` appends compact decision commitments
+   and links every revision to its predecessor. Settlement reads are match-wide
+   latest-only so a later dispute invalidates stale proof.
 2. An x402 resource prices the premium packet in native Injective testnet USDC.
 3. The Agent Skill checks evidence readiness and spend policy before signing.
-4. If the Agent has insufficient USDC, the current plan-only CCTP tool validates
-   a Base Sepolia → Injective route and stops at the pre-burn approval boundary.
-   Executable burn, attestation, mint, and balance recheck remain deployment work.
+4. CCTP is future work. The design records the Base Sepolia → Injective route
+   and approval boundary, but this release claims no burn, attestation, mint,
+   or balance-recheck transaction.
 5. The Proofline MCP returns the packet and verifies the separate registry
    anchor; the official Injective MCP can complement it with wallet operations.
 
-## MVP and stretch boundary
+## Delivered product boundary
 
-### Complete, reproducible MVP
+### Complete and reproducible
 
 - attributed historical replay with explicit synthetic fault;
 - canonical event and packet hashing;
 - source independence, conflict quarantine, and settlement gate;
 - web control room, free API, 402 sandbox journey, and packet verifier;
-- deployable Injective EVM registry;
+- fully verified Injective EVM registry and real final-result anchor;
+- real `0.01` native test-USDC x402 settlement;
+- EIP-712 trusted-issuer proof layer and latest on-chain proof layer;
 - domain MCP server and Agent Skill;
-- testnet-ready x402, anchoring, and CCTP configuration boundaries.
+- official Injective MCP execution transcript;
+- 2026 delayed and scheduled data alongside the 2022 replay.
 
-### Deployment work requiring external credentials or funds
+### Explicitly outside the claim
 
-- attach paid live-sports provider keys;
-- deploy and publish the registry address;
-- fund the dedicated testnet anchorer/facilitator/Agent wallets;
-- record a real x402 settlement and CCTP bridge journey;
-- publish the web/API and demo video.
+- active paid-provider live sports feed;
+- CCTP approve, burn, attestation, mint, and destination balance recheck;
+- any mainnet asset or production-money settlement.
 
-These are intentionally reported as configuration-dependent—not simulated as
-successful transactions in the local judge path.
+These surfaces are not simulated or described as successful transactions.
 
 ## Success metrics
 
 - A judge understands the conflict-to-quarantine thesis within 60 seconds.
 - A fresh checkout completes the replay without live sports or wallet uptime.
-- The same event packet validates through API and MCP.
+- The same event packet exposes separate integrity, trusted-issuer, and latest
+  on-chain validation results through API and MCP.
 - A one-field tamper produces a visible failed check.
-- No low-confidence, contested, non-final, or unanchored result can return an
+- No low-score, contested, non-final, or unanchored result can return an
   allowed settlement decision.
 - Every paid or chain-related response declares whether value was transferred
   and whether the receipt is demo or testnet.

@@ -1,0 +1,54 @@
+{
+  "schema": "proofline.schedule-snapshot.v1",
+  "retrievedAt": "2026-07-11T10:38:05.000Z",
+  "source": {
+    "provider": "fifa",
+    "label": "FIFA World Cup 2026 official fixtures and results",
+    "url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/match-schedule-fixtures-results-teams-stadiums",
+    "adapterVersion": "fifa-schedule-snapshot@1.0.0"
+  },
+  "matches": [
+    {
+      "id": "WC-2026-M99-NOR-ENG",
+      "competition": "FIFA World Cup 2026",
+      "season": 2026,
+      "label": "Norway vs England",
+      "homeTeam": "Norway",
+      "awayTeam": "England",
+      "venue": "Miami Stadium",
+      "status": "scheduled",
+      "score": null,
+      "scheduledDate": "2026-07-11",
+      "scheduledAt": "2026-07-11T21:00:00.000Z",
+      "dataMode": "scheduled",
+      "disclosure": "Official schedule snapshot · 17:00 ET · no live status or score is claimed",
+      "rawPayload": {
+        "section": "FIFA World Cup 2026 quarter-final fixtures and results",
+        "date": "Saturday, 11 July 2026",
+        "fixture": "Match 99 – Norway v England - 17:00 - Miami Stadium",
+        "timezone": "ET"
+      }
+    },
+    {
+      "id": "WC-2026-M100-ARG-SUI",
+      "competition": "FIFA World Cup 2026",
+      "season": 2026,
+      "label": "Argentina vs Switzerland",
+      "homeTeam": "Argentina",
+      "awayTeam": "Switzerland",
+      "venue": "Kansas City Stadium",
+      "status": "scheduled",
+      "score": null,
+      "scheduledDate": "2026-07-11",
+      "scheduledAt": "2026-07-12T01:00:00.000Z",
+      "dataMode": "scheduled",
+      "disclosure": "Official schedule snapshot · 21:00 ET · no live status or score is claimed",
+      "rawPayload": {
+        "section": "FIFA World Cup 2026 quarter-final fixtures and results",
+        "date": "Saturday, 11 July 2026",
+        "fixture": "Match 100 – Argentina v Switzerland - 21:00 - Kansas City Stadium",
+        "timezone": "ET"
+      }
+    }
+  ]
+}

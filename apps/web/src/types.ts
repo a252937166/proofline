@@ -1,6 +1,7 @@
 export type MatchStatus = "scheduled" | "live" | "finished";
 export type VerificationState = "observed" | "insufficient" | "contested" | "verified";
 export type AnchorMode = "none" | "demo" | "injective-testnet";
+export type DataMode = "live" | "delayed" | "scheduled" | "historical-replay";
 
 export interface MatchScore {
   home: number;
@@ -156,6 +157,66 @@ export interface ReplaySnapshot {
   }>;
 }
 
+export interface MatchCatalogEntry {
+  id: string;
+  competition: string;
+  season: number;
+  label: string;
+  homeTeam: string;
+  awayTeam: string;
+  venue: string;
+  status: MatchStatus;
+  score: MatchScore | null;
+  scheduledDate: string;
+  scheduledAt: string | null;
+  dataMode: DataMode;
+  disclosure: string;
+  source: {
+    provider: string;
+    label: string;
+    url: string;
+    retrievedAt: string;
+    rawPayloadHash: `0x${string}`;
+    adapterVersion: string;
+  };
+}
+
+export interface MatchCatalogResponse {
+  schema: "proofline.match-catalog.v1";
+  mode: "catalog";
+  availableModes: DataMode[];
+  liveProviderActive: boolean;
+  disclosure: string;
+  matches: MatchCatalogEntry[];
+}
+
+export interface McpRuntimeResponse {
+  schema: "proofline.mcp-runtime.v1";
+  implementationAvailable: boolean;
+  runtimeConnected: boolean;
+  health: "online" | "stale" | "never-seen";
+  agentReady: boolean;
+  heartbeatAgeMs: number | null;
+  heartbeat: {
+    sessionId: string;
+    serverVersion: string;
+    transport: "stdio";
+    tools: string[];
+    at: string;
+  } | null;
+  logs: Array<{
+    id: string;
+    sessionId: string;
+    tool: string;
+    inputSummary: Record<string, unknown>;
+    outcome: "success" | "failure";
+    resultSummary: string;
+    durationMs: number;
+    at: string;
+  }>;
+  disclosure: string;
+}
+
 export interface IntegrationsResponse {
   schema: "proofline.integrations.v1";
   dataMode: {
@@ -228,6 +289,10 @@ export interface ProofPacketResponse {
     match: ReplayMatch;
     eventId: string;
     observations: EventObservation[];
+    evidenceRoot?: `0x${string}`;
+    issuerAddress?: `0x${string}`;
+    issuerSignature?: `0x${string}`;
+    signatureScheme?: "eip712";
     verification: VerificationResult;
     anchor?: AnchorReceipt;
     settlement: SettlementDecision;
@@ -260,7 +325,20 @@ export interface ProofVerificationResponse {
     passed: boolean;
     detail: string;
   }>;
-  integrityOnly: true;
+  integrityOnly: boolean;
+  integrity?: {
+    valid: boolean;
+    checks: ProofVerificationResponse["checks"];
+  };
+  signature?: {
+    valid: boolean;
+    cryptographicValid: boolean;
+    trustedIssuer: boolean;
+    scheme: "eip712";
+    issuerAddress: `0x${string}`;
+    recoveredAddress: `0x${string}` | null;
+    detail: string;
+  };
   onchain: {
     checked: boolean;
     valid: boolean;

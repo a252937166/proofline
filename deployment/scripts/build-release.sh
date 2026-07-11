@@ -97,17 +97,41 @@ trap cleanup EXIT INT TERM
 
 API_STAGE="${TEMP_ROOT}/api"
 WEB_STAGE="${TEMP_ROOT}/web"
-mkdir -p "${API_STAGE}/apps/api" "${API_STAGE}/packages/core" "${API_STAGE}/data/replays" "${WEB_STAGE}"
+mkdir -p \
+  "${API_STAGE}/apps/api" \
+  "${API_STAGE}/packages/core" \
+  "${API_STAGE}/packages/mcp" \
+  "${API_STAGE}/data" \
+  "${WEB_STAGE}"
 
 cd "${REPOSITORY_ROOT}"
 npm run build -w @proofline/core
 npm run build -w @proofline/api
+npm run build -w @proofline/mcp
 VITE_API_BASE=/api npm run build -w @proofline/web
 
 cp -a apps/api/dist "${API_STAGE}/apps/api/dist"
 cp -a packages/core/dist "${API_STAGE}/packages/core/dist"
 cp packages/core/package.json "${API_STAGE}/packages/core/package.json"
-cp data/replays/wales-iran-2022.json "${API_STAGE}/data/replays/wales-iran-2022.json"
+cp -a packages/mcp/dist "${API_STAGE}/packages/mcp/dist"
+for dataset_directory in replays schedules snapshots; do
+  source_directory="data/${dataset_directory}"
+  target_directory="${API_STAGE}/data/${dataset_directory}"
+  if [[ ! -d "${source_directory}" ]] || ! find "${source_directory}" -type f -name '*.json' -print -quit | grep -q .; then
+    printf 'Required dataset directory has no JSON files: %s\n' "${source_directory}" >&2
+    exit 1
+  fi
+  if find "${source_directory}" -type l -print -quit | grep -q .; then
+    printf 'Dataset directories may not contain symlinks: %s\n' "${source_directory}" >&2
+    exit 1
+  fi
+  if find "${source_directory}" -type f ! -name '*.json' -print -quit | grep -q .; then
+    printf 'Dataset directories may contain JSON files only: %s\n' "${source_directory}" >&2
+    exit 1
+  fi
+  mkdir -p "${target_directory}"
+  cp -a "${source_directory}/." "${target_directory}/"
+done
 cp "${DEPLOYMENT_DIR}/runtime/package.json" "${API_STAGE}/package.json"
 cp -a apps/web/dist/. "${WEB_STAGE}/"
 printf '%s\n' "${RELEASE_ID}" > "${API_STAGE}/RELEASE"

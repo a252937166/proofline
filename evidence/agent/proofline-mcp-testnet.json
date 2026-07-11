@@ -1,0 +1,87 @@
+{
+  "schema": "proofline.mcp-execution-evidence.v1",
+  "capturedAt": "2026-07-11T11:18:49.438Z",
+  "client": {
+    "name": "proofline-judge-evidence-client",
+    "version": "1.0.0",
+    "transport": "stdio"
+  },
+  "server": {
+    "name": "proofline",
+    "version": "0.2.0",
+    "reportedToolCount": 10,
+    "runtimeHeartbeat": "online",
+    "sessionId": "proofline-testnet-judge"
+  },
+  "calls": [
+    {
+      "tool": "list_matches",
+      "input": { "mode": "delayed" },
+      "durationMs": 9,
+      "success": true,
+      "result": {
+        "mode": "catalog",
+        "matchId": "WC-2026-M97-FRA-MAR",
+        "dataMode": "delayed",
+        "liveProviderActive": false
+      }
+    },
+    {
+      "tool": "get_match_events",
+      "input": { "match_id": "WC-2026-M97-FRA-MAR" },
+      "durationMs": 5,
+      "success": true,
+      "result": {
+        "dataMode": "delayed",
+        "eventId": "final-result",
+        "disclosure": "Delayed snapshot; captured after full time; not a live feed"
+      }
+    },
+    {
+      "tool": "verify_event",
+      "input": {
+        "match_id": "WC-2022-WAL-IRN",
+        "event_id": "final-result"
+      },
+      "durationMs": 5,
+      "success": true,
+      "result": {
+        "dataMode": "historical-replay",
+        "state": "verified"
+      }
+    },
+    {
+      "tool": "assess_settlement_readiness",
+      "input": {
+        "match_id": "WC-2022-WAL-IRN",
+        "event_id": "final-result"
+      },
+      "durationMs": 3,
+      "success": true,
+      "result": {
+        "settlementAllowed": true,
+        "evidenceScoreBps": 9649
+      }
+    },
+    {
+      "tool": "verify_onchain_anchor",
+      "input": {
+        "match_id": "WC-2022-WAL-IRN",
+        "event_hash": "0x088bd2d1850c38ea45bc365549142d1cd240c8c72339a1c5c7d645d0fad6f10f",
+        "evidence_root": "0x696dc277d6766b67d90774b5d8e0c021a7ba114f18c7110e70cba75b8e0d8d3b"
+      },
+      "durationMs": 3978,
+      "success": true,
+      "result": {
+        "valid": true,
+        "onchainRead": true,
+        "network": "eip155:1439",
+        "blockNumber": "133190869",
+        "registryAddress": "0x959538bE97f6Fc3A09C823514acC176681155A7e",
+        "state": "verified",
+        "revision": "1"
+      }
+    }
+  ],
+  "disclosure": "This is a captured execution transcript from the built Proofline MCP stdio server. The final tool performed a fresh Injective EVM eth_call. It contains no private key, payment signature, or audit token."
+}

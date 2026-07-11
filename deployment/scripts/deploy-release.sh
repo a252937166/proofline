@@ -70,7 +70,10 @@ WEB_CHECKSUM=${WEB_CHECKSUM:-"${WEB_ARCHIVE}.sha256"}
 
 for required_path in \
   "${API_ARCHIVE}" "${WEB_ARCHIVE}" "${API_CHECKSUM}" "${WEB_CHECKSUM}" \
-  /etc/systemd/system/proofline-api.service /opt/proofline/shared/api.env; do
+  /etc/systemd/system/proofline-api.service \
+  /etc/systemd/system/proofline-mcp.service \
+  /opt/proofline/shared/api.env \
+  /opt/proofline/shared/mcp.env; do
   if [[ ! -r "${required_path}" ]]; then
     printf 'Required file is missing or unreadable: %s\n' "${required_path}" >&2
     exit 1
@@ -141,7 +144,10 @@ for expected_file in \
   "${API_STAGE}/RELEASE" \
   "${API_STAGE}/apps/api/dist/index.js" \
   "${API_STAGE}/packages/core/dist/index.js" \
+  "${API_STAGE}/packages/mcp/dist/index.js" \
   "${API_STAGE}/data/replays/wales-iran-2022.json" \
+  "${API_STAGE}/data/schedules/world-cup-2026.json" \
+  "${API_STAGE}/data/snapshots/france-morocco-2026.json" \
   "${API_STAGE}/package.json" \
   "${API_STAGE}/package-lock.json" \
   "${WEB_STAGE}/RELEASE" \
@@ -233,7 +239,9 @@ rollback_on_error() {
     restore_link "${OLD_WEB}" /var/www/proofline/current
     if [[ -n "${OLD_API}" ]]; then
       systemctl restart proofline-api.service
+      systemctl restart proofline-mcp.service
     else
+      systemctl stop proofline-mcp.service
       systemctl stop proofline-api.service
     fi
     if systemctl is-active --quiet nginx; then
@@ -268,6 +276,25 @@ wait_for_health() {
 }
 
 wait_for_health "${LOCAL_HEALTH_URL}" 30
+systemctl restart proofline-mcp.service
+
+wait_for_mcp() {
+  local attempts=${1:-15}
+  local response
+  local attempt
+  for ((attempt = 1; attempt <= attempts; attempt += 1)); do
+    if response=$(curl --fail --silent --show-error --max-time 3 \
+      http://127.0.0.1:4035/api/mcp/runtime 2>/dev/null); then
+      if [[ "${response}" == *'"agentReady":true'* && "${response}" == *'"transport":"stdio"'* ]]; then
+        return 0
+      fi
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+wait_for_mcp 15
 nginx -t
 if systemctl is-active --quiet nginx; then
   systemctl reload nginx

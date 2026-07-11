@@ -15,14 +15,17 @@ Node.js 22, nginx 1.26, and Certbot, which satisfy this deployment.
 | API releases | `/opt/proofline/releases/<release-id>` | Immutable, `root:proofline` |
 | Active API | `/opt/proofline/current` | Atomic symlink to one release |
 | API environment | `/opt/proofline/shared/api.env` | Separate, `root:root`, mode `0600` |
+| MCP environment | `/opt/proofline/shared/mcp.env` | Audit token and public API metadata only; no wallet private keys |
+| Runtime state | `/opt/proofline/state` | `proofline:proofline`, mode `0700`; MCP audit and x402 replay ledger |
 | Web releases | `/var/www/proofline/releases/<release-id>` | Immutable static files |
 | Active web | `/var/www/proofline/current` | Atomic symlink to the matching release |
 | API listener | `127.0.0.1:4035` | Loopback only; nginx owns the public edge |
 | systemd unit | `/etc/systemd/system/proofline-api.service` | Runs as unprivileged `proofline` |
+| MCP unit | `/etc/systemd/system/proofline-mcp.service` | Keeps the real stdio heartbeat online without inventing tool calls |
 | nginx vhost | `/etc/nginx/conf.d/proofline.axiqo.xyz.conf` | Static web plus `/api/` proxy |
 
-The release archives contain only compiled API/Core code, the attributed replay
-dataset, production dependencies, and web assets. `.env`, wallet files, API
+The release archives contain only compiled API/Core/MCP code, the attributed replay,
+2026 schedule and delayed-snapshot datasets, production dependencies, and web assets. `.env`, wallet files, API
 tokens, and private keys are explicitly excluded. Payment and anchor keys stay
 only in the root-readable systemd environment file.
 
@@ -52,7 +55,9 @@ disk/RAM. Both modes generate API/web archives and separate `.sha256` files
 under `deployment/out/`.
 
 The web build is forced to use same-origin `/api`; no server credential is
-embedded in browser assets.
+embedded in browser assets. The API archive copies every JSON dataset under
+`data/replays`, `data/schedules`, and `data/snapshots`; it never packages
+`data/runtime`.
 
 ## 2. Transfer without transferring secrets
 
@@ -88,13 +93,17 @@ directories, the systemd unit, the HTTP bootstrap vhost, and these commands:
 - `/usr/local/sbin/proofline-rollback`
 - `/usr/local/sbin/proofline-health-check`
 
-It creates `/opt/proofline/shared/api.env` only when absent and never overwrites
-an existing environment file. Review it with `sudoedit`; keep mode `0600`:
+It creates `/opt/proofline/shared/api.env` and `mcp.env` only when absent and
+never overwrites an existing environment file. Review both with `sudoedit`;
+keep mode `0600`:
 
 ```bash
 sudoedit /opt/proofline/shared/api.env
+sudoedit /opt/proofline/shared/mcp.env
 sudo chown root:root /opt/proofline/shared/api.env
+sudo chown root:root /opt/proofline/shared/mcp.env
 sudo chmod 0600 /opt/proofline/shared/api.env
+sudo chmod 0600 /opt/proofline/shared/mcp.env
 ```
 
 The template intentionally starts in labelled replay/demo mode. For real
@@ -102,6 +111,12 @@ Injective testnet paths, add only dedicated testnet credentials, contract
 address, payee, and facilitator settings, then change `CHAIN_MODE` and
 `X402_MODE`. Remote RPC/facilitator endpoints must use HTTPS. Never reuse a
 mainnet key.
+
+`PROOFLINE_MCP_AUDIT_TOKEN` must have the same high-entropy value in both
+files. Keep anchor and facilitator private keys in `api.env` only. Set
+`PROOFLINE_MCP_AUDIT_FILE=/opt/proofline/state/mcp-runtime.json` and
+`PROOFLINE_X402_LEDGER_FILE=/opt/proofline/state/x402-ledger.json` in
+`api.env` so judge traces and payment replay protection survive restarts.
 
 If SELinux is enforcing, nginx needs permission to proxy to the loopback API:
 
@@ -135,7 +150,8 @@ The deploy command:
 2. verifies the API can import as the `proofline` user;
 3. moves both releases into immutable directories;
 4. atomically switches both `current` symlinks;
-5. restarts systemd and checks `127.0.0.1:4035/api/health`;
+5. restarts the API and MCP services, then checks API health and a fresh real
+   stdio MCP heartbeat;
 6. validates/reloads nginx and optionally checks the public URL;
 7. restores both previous symlinks automatically on any failure.
 
@@ -143,8 +159,8 @@ Inspect the result:
 
 ```bash
 sudo proofline-health-check
-sudo systemctl status proofline-api.service --no-pager
-sudo journalctl -u proofline-api.service -n 100 --no-pager
+sudo systemctl status proofline-api.service proofline-mcp.service --no-pager
+sudo journalctl -u proofline-api.service -u proofline-mcp.service -n 100 --no-pager
 curl -fsS http://127.0.0.1:4035/api/health
 ```
 

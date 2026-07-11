@@ -8,6 +8,8 @@ export const INJECTIVE_TESTNET_RPC_URL =
   "https://k8s.testnet.json-rpc.injective.network/";
 export const INJECTIVE_TESTNET_EXPLORER_URL =
   "https://testnet.blockscout.injective.network";
+export const INJECTIVE_TESTNET_EXPLORER_API_URL =
+  "https://testnet.blockscout-api.injective.network/api";
 export const INJECTIVE_TESTNET_USDC =
   "0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d" as Address;
 export const X402_PRICE_ATOMIC = "10000";
@@ -22,6 +24,7 @@ export type AnchorRuntimeConfig =
       registryAddress: Address;
       chainId: number;
       explorerUrl: string;
+      explorerApiUrl: string;
     };
 
 export type X402RuntimeConfig =
@@ -32,6 +35,9 @@ export type X402RuntimeConfig =
       payTo?: Address;
       facilitatorPrivateKey?: Hex;
       facilitatorUrl?: string;
+      facilitatorRpcUrl?: string;
+      rpcProxyToken?: string;
+      ledgerFile?: string;
       rpcUrl: string;
       publicApiUrl?: string;
     };
@@ -145,6 +151,13 @@ export function readRuntimeConfig(
     optionalString(env.PUBLIC_INJECTIVE_EXPLORER_URL) ??
     INJECTIVE_TESTNET_EXPLORER_URL;
   assertPublicEndpointUrl(explorerUrl, "PUBLIC_INJECTIVE_EXPLORER_URL");
+  const explorerApiUrl =
+    optionalString(env.PUBLIC_INJECTIVE_EXPLORER_API_URL) ??
+    INJECTIVE_TESTNET_EXPLORER_API_URL;
+  assertPublicEndpointUrl(
+    explorerApiUrl,
+    "PUBLIC_INJECTIVE_EXPLORER_API_URL",
+  );
   const chainId = Number(
     env.INJECTIVE_CHAIN_ID ??
       env.INJECTIVE_TESTNET_CHAIN_ID ??
@@ -167,6 +180,7 @@ export function readRuntimeConfig(
           registryAddress,
           chainId,
           explorerUrl,
+          explorerApiUrl,
         }
       : { mode: "demo" };
 
@@ -176,6 +190,33 @@ export function readRuntimeConfig(
   );
   const payTo = optionalString(env.X402_PAY_TO);
   const facilitatorUrl = optionalString(env.X402_FACILITATOR_URL);
+  const rpcProxyToken = optionalString(env.X402_RPC_PROXY_TOKEN);
+  const ledgerFile = optionalString(env.PROOFLINE_X402_LEDGER_FILE);
+  if (ledgerFile && (ledgerFile.includes("\0") || ledgerFile.length > 4_096)) {
+    throw new Error("PROOFLINE_X402_LEDGER_FILE must be a valid filesystem path");
+  }
+  if (
+    rpcProxyToken &&
+    !/^[A-Za-z0-9_-]{32,128}$/.test(rpcProxyToken)
+  ) {
+    throw new Error(
+      "X402_RPC_PROXY_TOKEN must be 32-128 letters, digits, underscores, or hyphens",
+    );
+  }
+  const configuredFacilitatorRpcUrl = optionalString(
+    env.X402_FACILITATOR_RPC_URL,
+  );
+  if (configuredFacilitatorRpcUrl) {
+    assertSecureOrLoopbackUrl(
+      configuredFacilitatorRpcUrl,
+      "X402_FACILITATOR_RPC_URL",
+    );
+  }
+  const facilitatorRpcUrl =
+    configuredFacilitatorRpcUrl ??
+    (rpcProxyToken
+      ? `http://127.0.0.1:${listenPort(env.PORT)}/api/internal/evm-rpc/${rpcProxyToken}`
+      : undefined);
   const publicApiUrl = optionalString(env.PUBLIC_API_URL);
   if (facilitatorUrl) {
     assertSecureOrLoopbackUrl(facilitatorUrl, "X402_FACILITATOR_URL");
@@ -188,12 +229,17 @@ export function readRuntimeConfig(
       mode: "live",
       configured:
         isAddress(payTo) &&
-        (isPrivateKey(facilitatorPrivateKey) || Boolean(facilitatorUrl)),
+        (Boolean(facilitatorUrl) ||
+          (isPrivateKey(facilitatorPrivateKey) &&
+            (env.NODE_ENV !== "production" || Boolean(rpcProxyToken)))),
       ...(isPrivateKey(facilitatorPrivateKey)
         ? { facilitatorPrivateKey }
         : {}),
       ...(isAddress(payTo) ? { payTo } : {}),
       ...(facilitatorUrl ? { facilitatorUrl } : {}),
+      ...(facilitatorRpcUrl ? { facilitatorRpcUrl } : {}),
+      ...(rpcProxyToken ? { rpcProxyToken } : {}),
+      ...(ledgerFile ? { ledgerFile } : {}),
       ...(publicApiUrl ? { publicApiUrl } : {}),
       rpcUrl,
     };

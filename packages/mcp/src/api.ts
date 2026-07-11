@@ -79,6 +79,23 @@ export class ProoflineApi {
     );
   }
 
+  async postWithHeaders(
+    pathname: string,
+    body: unknown,
+    headers: Record<string, string>,
+    allowedStatuses: readonly number[] = [],
+  ): Promise<ApiResponse> {
+    return this.request(
+      pathname,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", ...headers },
+        body: JSON.stringify(body),
+      },
+      allowedStatuses,
+    );
+  }
+
   async getWithHeaders(
     pathname: string,
     headers: Record<string, string>,

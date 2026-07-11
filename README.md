@@ -5,23 +5,38 @@
 Proofline is a conflict-aware match-verification and settlement layer for World
 Cup products and AI agents. It turns attributed sports observations into a
 reproducible evidence packet, holds automation when sources disagree, and
-can anchor the final canonical hash on Injective EVM testnet.
+anchors the final canonical hash on Injective EVM testnet.
 
 The product is built around **VARA** — the Verifiable Autonomous Referee Agent.
 Unlike a score widget with a blockchain button, VARA exposes the full decision
-path: provenance, independence groups, disagreement, confidence inputs,
+path: provenance, independence groups, disagreement, Evidence Score inputs,
 canonical event JSON, payment boundary, and on-chain commitment.
 
-**Live demo:** [proofline.axiqo.xyz](https://proofline.axiqo.xyz) · The public
-deployment is deliberately labelled **Historical Replay / Injective Demo / x402
-Sandbox** until the dedicated testnet wallets are funded and the guarded
-testnet runbook has produced public transaction evidence.
+**Hosted demo:** [proofline.axiqo.xyz](https://proofline.axiqo.xyz) ·
+**GitHub:** [a252937166/proofline](https://github.com/a252937166/proofline)
+
+## Public Injective testnet proof
+
+The complete paid-proof path was executed on Injective EVM testnet
+(`eip155:1439`) on 11 July 2026:
+
+| Evidence | Public result |
+| --- | --- |
+| Verified registry | [`0x959538bE97f6Fc3A09C823514acC176681155A7e`](https://testnet.blockscout.injective.network/address/0x959538bE97f6Fc3A09C823514acC176681155A7e) — source **fully verified**, Solidity `0.8.35` |
+| Deploy | [`0x87bf…286fc`](https://testnet.blockscout.injective.network/tx/0x87bf72e57d0c6c2768a9fae0177209cfd06d3d3b2c29b12986b350352f9286fc) |
+| Grant anchorer role | [`0x7270…748b3`](https://testnet.blockscout.injective.network/tx/0x72704feff656f75de591da4ee624333294509b76beaba1b4925109096bd748b3) |
+| Anchor `WC-2022-WAL-IRN` final result | [`0x455e…c6038`](https://testnet.blockscout.injective.network/tx/0x455e933b149e8f291d41f5e5fc58fdca55fdb56c7cfd3a9e1b2f55d32f6c6038) |
+| x402 settlement, `0.01` test USDC | [`0x7970…624a`](https://testnet.blockscout.injective.network/tx/0x79700fa00ff0d0c7a5821608f6221c7805b2feb3fe72133d526b491c41fe624a) |
+
+The x402 receipt moved the payer from `20.00` to `19.99` test USDC and the
+payee from `20.00` to `20.01`. The sanitized, machine-readable run is committed
+as [real-e2e-2026-07-11.json](evidence/testnet/real-e2e-2026-07-11.json).
 
 ## The judge moment
 
 Run the included historical replay of **Wales 0–2 IR Iran (25 Nov 2022)**. A
 synthetic lagging feed changes Wayne Hennessey’s 86th-minute red card to yellow.
-Proofline immediately pulls confidence back, marks the event `contested`, and
+Proofline immediately pulls the Evidence Score back, marks the event `contested`, and
 keeps settlement held. When the official corroboration arrives and the bad
 claim is retracted, the same deterministic verifier recovers. Late goals,
 full-time status, and a matching anchor finally open the settlement gate.
@@ -29,6 +44,13 @@ full-time status, and a matching anchor finally open the settlement gate.
 The fault is labelled synthetic everywhere. The football facts are sourced
 from a fixed CC0 OpenFootball commit and an independently linked FIFA match
 review; the replay is permanently labelled **Historical Replay · Not Live**.
+
+The product also exposes two honest 2026 data modes. `WC-2026-M97-FRA-MAR` is
+a delayed, post-match France 2–0 Morocco snapshot with ESPN and FIFA provenance.
+`WC-2026-M99-NOR-ENG` and `WC-2026-M100-ARG-SUI` are scheduled fixtures with
+`score=null`; they are never presented as live matches. The deterministic 2022
+replay remains the judge path because it can reproduce a source conflict on
+demand.
 
 ## End-to-end product
 
@@ -45,19 +67,19 @@ flowchart LR
   H --> I
   F --> I
   I --> J["Agent Skill policy"]
-  K["CCTP plan-only funding path"] -.-> H
+  K["CCTP future funding path"] -.-> H
 ```
 
 ## Competition fit
 
 | Requirement | Proofline implementation | Judge proof |
 | --- | --- | --- |
-| Injective | Append-only `MatchProofRegistry` on Injective EVM testnet | Registry address and Blockscout transaction after deployment |
-| x402 | `0.01` native testnet USDC proof resource with a policy-capped Agent flow | Initial `402`, payment requirements, then portable packet |
-| USDC / CCTP | Plan-only Base Sepolia domain `6` → Injective domain `29` funding safety path | Route/approval policy; executable burn/attest/mint is not claimed |
-| MCP Server | Domain tools for match lookup, event verification, settlement readiness, proof purchase, packet and anchor checks | Run tools from Claude, Cursor, or another MCP client |
-| Agent Skill | Explicit source, settlement, spending, replay, and CCTP safety rules | Agent refuses low-confidence or non-final settlement |
-| AI-native product | Machine-verifiable evidence and deterministic decisions, not a chat wrapper | Same packet verifies inside API, MCP, and independent code |
+| Injective | Append-only `MatchProofRegistry` on Injective EVM testnet | Fully verified contract, deployment, role grant, and real anchor linked above |
+| x402 | `0.01` native testnet USDC proof resource with a policy-capped Agent flow | Real successful settlement plus payer/payee balance deltas linked above |
+| USDC / CCTP | Native testnet USDC payment is executed; CCTP is future work | No burn, attestation, or mint transaction is claimed |
+| MCP Server | Ten domain tools for match lookup, event verification, settlement readiness, proof purchase, packet and anchor checks | Stdio runtime plus committed official Injective MCP execution evidence |
+| Agent Skill | Explicit source, settlement, spending, replay, and CCTP safety rules | Agent refuses low-score or non-final settlement |
+| AI-native product | Machine-verifiable evidence and deterministic decisions, not a chat wrapper | Packet integrity, trusted issuer signature, and latest on-chain commitment verify independently |
 
 ## Quick start
 
@@ -84,7 +106,8 @@ receipt. It never claims that sandbox payment or anchoring happened on-chain.
 4. Let the replay reach full time, verification, and anchoring.
 5. Request the premium proof: the first response is `402 Payment Required`.
 6. Use the labelled sandbox signature to retrieve the packet locally.
-7. Verify the packet, then modify one field and observe verification fail.
+7. Inspect its three verification layers, then modify one field and observe
+   packet integrity fail.
 
 For the real testnet path, follow the guarded commands in the
 [testnet runbook](docs/TESTNET_RUNBOOK.md). The deployment command fills the
@@ -108,21 +131,28 @@ npm run mcp               # start the stdio MCP server
 npm run smoke             # exercise replay, 402, packet and tamper rejection
 ```
 
-## Verified locally
+## Verification model
 
-The current checkout has been validated with:
+`96.49/100` is an **Evidence Score**, not a probability that an event is true.
+It is a deterministic policy score built from source reliability, independent
+quorum, agreement, freshness, and conflict penalties. Only one strongest
+representative per `independenceGroup` can affect candidate ranking and score;
+duplicating one upstream feed 100 times adds no voting weight.
 
-- `npm run check`: 34 passing checks — Core 7, API 18, MCP policy 3, contract
-  artifact/interface guards 3, and guarded testnet workflow 3 — plus
-  production builds and Solidity compilation.
-- `npm audit`: 0 known vulnerabilities.
-- `npm run smoke`: conflict at frame 4, final confidence `9649` bps,
-  settlement open only after the matching demo anchor, 402 negotiation,
-  packet verification, and tamper rejection.
-- Live Chrome pass at `1920×1080`: complete 15-frame replay, settlement gate,
-  and the full quote → sandbox report → recomputation flow. Responsive rules
-  cover `720px` and `420px`, with motion disabled under
-  `prefers-reduced-motion`.
+Every premium packet is checked at three independent layers:
+
+1. **Packet integrity:** recompute canonical event JSON, `eventHash`,
+   `evidenceRoot`, policy result, and `packetHash`.
+2. **Trusted issuer:** recover the EIP-712 signer and require it to match the
+   configured trusted issuer, not merely any cryptographically valid signer.
+3. **Latest on-chain commitment:** read the match-wide latest registry revision
+   and match its event hash, evidence root, score, and valid state. A later
+   dispute or rejection invalidates an older proof for settlement.
+
+Run `npm run check` for type checks, unit/integration tests, real-EVM contract
+tests, browser tests, production builds, and Solidity compilation. `npm run
+smoke` exercises conflict, recovery, proof negotiation, verification, and
+tamper rejection locally.
 
 ## Repository map
 
@@ -147,16 +177,17 @@ docs/               Architecture, trust, design and judging evidence
 - Every 402 quote freezes a packet hash for five minutes; the paid retry is
   rejected before settlement unless its signed requirement carries that quote
   ID, so replay progress cannot swap the report after review.
-- A final result requires a finished match, threshold confidence, no conflict,
+- Signed payments are journaled by session, packet, payer, and EIP-3009 nonce.
+  Concurrent duplicates are locked, settled retries are served from cache, and
+  uncertain outcomes remain pending across restarts instead of charging again.
+- A final result requires a finished match, threshold Evidence Score, no conflict,
   and a confirmed anchor for the same canonical hash.
-- Real testnet verification checks registry identity, latest event-specific
-  state, transaction target and decoded `anchorProof` calldata. Demo receipts
-  never pass this public-chain check.
+- Real testnet verification checks registry identity and the match-wide latest
+  revision. Demo receipts never pass this public-chain check.
 - Provider credentials and raw licensed payloads stay server-side.
 - The chain proves a commitment and ordering, not sporting truth by itself.
 - Demo and testnet paths are distinct machine-readable modes.
-- CCTP is plan-only in this build; no burn, attestation, mint, or balance recheck
-  is claimed.
+- CCTP is future work; no burn, attestation, mint, or balance recheck is claimed.
 
 See the [product specification](docs/PRODUCT_SPEC.md),
 [architecture](docs/ARCHITECTURE.md), [trust model](docs/TRUST_MODEL.md),
@@ -190,6 +221,20 @@ dedicated `X402_AGENT_PRIVATE_KEY`, but keeps it in memory by default. A real
 settlement additionally requires `--pay` and the exact ephemeral acknowledgement
 documented in the testnet runbook. It refuses any origin, redirect, chain,
 asset, payee, frozen packet hash, or price outside the allowlist in `.env`.
+
+## Agent execution evidence
+
+Proofline's stdio MCP exposes ten narrow tools, from `list_matches` and
+`verify_event` through `purchase_match_proof` and `verify_onchain_anchor`. The
+repository also contains a reproducible, sanitized execution transcript from
+the official Injective MCP at pinned commit
+`f5af39367975872a85b5447cefc9a197f2e635ea`: it listed 37 tools and successfully
+executed `address_normalize` and `usdc_native_info` on testnet. See
+[evidence/agent/official-injective-mcp.json](evidence/agent/official-injective-mcp.json)
+and [the capture script](scripts/capture-official-injective-mcp.ts). A second
+transcript records five real calls through Proofline's own ten-tool MCP,
+including a fresh revision-1 `verify_onchain_anchor` read:
+[evidence/agent/proofline-mcp-testnet.json](evidence/agent/proofline-mcp-testnet.json).
 
 ## License
 

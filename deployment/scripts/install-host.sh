@@ -53,6 +53,7 @@ fi
 
 install -d -o root -g root -m 0755 /opt/proofline /opt/proofline/releases
 install -d -o root -g root -m 0700 /opt/proofline/shared
+install -d -o proofline -g proofline -m 0700 /opt/proofline/state
 install -d -o root -g root -m 0755 /var/www/proofline /var/www/proofline/releases
 install -d -o root -g root -m 0755 /var/www/letsencrypt
 
@@ -67,9 +68,23 @@ else
   printf 'Preserved existing /opt/proofline/shared/api.env and enforced mode 0600.\n'
 fi
 
+if [[ ! -e /opt/proofline/shared/mcp.env ]]; then
+  install -o root -g root -m 0600 \
+    "${DEPLOYMENT_DIR}/env/mcp.env.example" \
+    /opt/proofline/shared/mcp.env
+  printf 'Created /opt/proofline/shared/mcp.env; set the shared audit token before deploy.\n'
+else
+  chown root:root /opt/proofline/shared/mcp.env
+  chmod 0600 /opt/proofline/shared/mcp.env
+  printf 'Preserved existing /opt/proofline/shared/mcp.env and enforced mode 0600.\n'
+fi
+
 install -o root -g root -m 0644 \
   "${DEPLOYMENT_DIR}/systemd/proofline-api.service" \
   /etc/systemd/system/proofline-api.service
+install -o root -g root -m 0644 \
+  "${DEPLOYMENT_DIR}/systemd/proofline-mcp.service" \
+  /etc/systemd/system/proofline-mcp.service
 
 for script_name in deploy-release rollback health-check; do
   install -o root -g root -m 0755 \
@@ -107,6 +122,7 @@ fi
 
 systemctl daemon-reload
 systemctl enable proofline-api.service >/dev/null
+systemctl enable proofline-mcp.service >/dev/null
 systemctl enable nginx >/dev/null
 if systemctl is-active --quiet nginx; then
   systemctl reload nginx
