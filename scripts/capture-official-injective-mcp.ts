@@ -1,4 +1,4 @@
-import { access } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -11,6 +11,9 @@ const serverEntry = path.resolve(
 const publicAddress =
   process.env.PROOFLINE_MCP_EVIDENCE_ADDRESS ??
   "0x672044f1b95740e003D5E62671E6c1DE4Cc058b0";
+const publicInjectiveAddress =
+  process.env.PROOFLINE_MCP_EVIDENCE_INJ_ADDRESS ??
+  "inj1vusyfude2aqwqq74ucn8rekpmexvqk9sajmcc5";
 
 await access(serverEntry);
 
@@ -29,7 +32,7 @@ const transport = new StdioClientTransport({
 });
 const client = new Client({
   name: "proofline-evidence-client",
-  version: "0.2.0",
+  version: "0.3.0",
 });
 
 await client.connect(transport);
@@ -40,6 +43,10 @@ try {
   const requests: Array<{ tool: string; input: Record<string, unknown> }> = [
     { tool: "address_normalize", input: { address: publicAddress } },
     { tool: "usdc_native_info", input: {} },
+    {
+      tool: "account_balances",
+      input: { address: publicInjectiveAddress },
+    },
   ];
 
   for (const request of requests) {
@@ -67,32 +74,32 @@ try {
     }
   }
 
-  process.stdout.write(
-    `${JSON.stringify(
-      {
-        schema: "proofline.agent-tool-evidence.v1",
-        capturedAt: new Date().toISOString(),
-        client: {
-          name: "proofline-evidence-client",
-          version: "0.2.0",
-          transport: "stdio",
-        },
-        server: {
-          name: "InjectiveLabs/mcp-server",
-          repository: "https://github.com/InjectiveLabs/mcp-server",
-          commit: process.env.INJECTIVE_MCP_COMMIT ?? "record-separately",
-          entry: serverEntry,
-          network: "testnet",
-          reportedToolCount: listed.tools.length,
-        },
-        calls,
-        disclosure:
-          "Read-only official Injective MCP calls. No private key, signature, or transaction is requested.",
-      },
-      null,
-      2,
-    )}\n`,
-  );
+  const evidence = {
+    schema: "proofline.agent-tool-evidence.v1",
+    capturedAt: new Date().toISOString(),
+    client: {
+      name: "proofline-evidence-client",
+      version: "0.3.0",
+      transport: "stdio",
+    },
+    server: {
+      name: "InjectiveLabs/mcp-server",
+      repository: "https://github.com/InjectiveLabs/mcp-server",
+      commit: process.env.INJECTIVE_MCP_COMMIT ?? "record-separately",
+      network: "testnet",
+      reportedToolCount: listed.tools.length,
+    },
+    calls,
+    disclosure:
+      "Read-only official Injective MCP calls. No private key, signature, or transaction is requested.",
+  };
+  const serialized = `${JSON.stringify(evidence, null, 2)}\n`;
+  if (process.argv.includes("--write")) {
+    const output = path.resolve("evidence/agent/official-injective-mcp.json");
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, serialized, { encoding: "utf8", mode: 0o644 });
+  }
+  process.stdout.write(serialized);
 } finally {
   await client.close();
 }

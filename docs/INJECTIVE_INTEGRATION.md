@@ -19,24 +19,24 @@ different namespaces and must never be substituted for one another.
 
 ## Verified registry deployment
 
-[`MatchProofRegistry`](https://testnet.blockscout.injective.network/address/0x959538bE97f6Fc3A09C823514acC176681155A7e)
-is deployed at `0x959538bE97f6Fc3A09C823514acC176681155A7e`. Blockscout reports the source
+[`MatchProofRegistry` v3](https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1?tab=contract)
+is deployed at `0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1`. Blockscout reports the source
 as **fully verified** with Solidity `v0.8.35+commit.47b9dedd`, optimizer `200`,
 EVM version `paris`, and deployed code hash
-`0xb18ca7e2ae1827086a33b6c57212d6fcac64dc76eba4e6e822377273d9de4858`.
+`0xb0a638a47be17775add74f872bc024e3c4389bd1487d3fd01a021377828cf0d4`.
 
 | Operation | Transaction |
 | --- | --- |
-| Deployment | [`0x87bf72e57d0c6c2768a9fae0177209cfd06d3d3b2c29b12986b350352f9286fc`](https://testnet.blockscout.injective.network/tx/0x87bf72e57d0c6c2768a9fae0177209cfd06d3d3b2c29b12986b350352f9286fc) |
-| Grant dedicated anchorer | [`0x72704feff656f75de591da4ee624333294509b76beaba1b4925109096bd748b3`](https://testnet.blockscout.injective.network/tx/0x72704feff656f75de591da4ee624333294509b76beaba1b4925109096bd748b3) |
-| Anchor replay final result | [`0x455e933b149e8f291d41f5e5fc58fdca55fdb56c7cfd3a9e1b2f55d32f6c6038`](https://testnet.blockscout.injective.network/tx/0x455e933b149e8f291d41f5e5fc58fdca55fdb56c7cfd3a9e1b2f55d32f6c6038) |
+| Deployment | [`0xdf71a0e7fce722bfdc39b58951f6548ef07b6d06cb101aa57bc51a5566979523`](https://testnet.blockscout.injective.network/tx/0xdf71a0e7fce722bfdc39b58951f6548ef07b6d06cb101aa57bc51a5566979523) |
+| Grant dedicated anchorer | [`0x58587a0d751248b714a6232cc75618762e02ff355aba00fa28d79216f252acb4`](https://testnet.blockscout.injective.network/tx/0x58587a0d751248b714a6232cc75618762e02ff355aba00fa28d79216f252acb4) |
+| Anchor 2026 final result | [`0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344`](https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344) |
 
-The anchor is match revision `1` for `WC-2022-WAL-IRN/final-result`. It commits:
+The anchor is match revision `1` for `WC-2026-M97-FRA-MAR/final-result`. It commits:
 
 ```text
-eventHash     0x088bd2d1850c38ea45bc365549142d1cd240c8c72339a1c5c7d645d0fad6f10f
-evidenceRoot  0x696dc277d6766b67d90774b5d8e0c021a7ba114f18c7110e70cba75b8e0d8d3b
-evidenceScore 9649 basis points = 96.49/100
+eventHash     0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30
+evidenceRoot  0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3
+evidenceScore 9825 basis points = 98.25/100
 ```
 
 `evidenceScore` is a deterministic policy score, not a probability. The
@@ -52,7 +52,9 @@ Solidity field remains named `confidenceBps` for schema compatibility.
 - `verifyLatestSettlementProof` checks only the match-wide latest revision. A
   later `Disputed` or `Rejected` state invalidates an older result for
   settlement.
-- A `Final` decision cannot roll back to a non-final state.
+- `appendRevision` is the only write entry point; every writer must declare
+  `expectedPreviousDecisionHash`.
+- A `Final` decision is fully immutable, including against a second `Final`.
 - Anchors store the compact `evidenceRoot`, not the complete sports payload or
   a circular hash containing their own transaction receipt.
 - Owner, anchorer, pause, and two-step ownership controls are on chain.
@@ -70,18 +72,23 @@ or `0.01` USDC.
 The complete path was executed successfully:
 
 - transaction:
-  [`0x79700fa00ff0d0c7a5821608f6221c7805b2feb3fe72133d526b491c41fe624a`](https://testnet.blockscout.injective.network/tx/0x79700fa00ff0d0c7a5821608f6221c7805b2feb3fe72133d526b491c41fe624a);
+  [`0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e`](https://testnet.blockscout.injective.network/tx/0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e);
 - payer: `0x672044f1b95740e003D5E62671E6c1DE4Cc058b0`, balance
-  `20.00 → 19.99` test USDC;
+  `19.99 → 19.98` test USDC;
 - payee/facilitator: `0x4595f5a3372F1ca653329140146081d309Ac2bf2`,
-  balance `20.00 → 20.01` test USDC;
+  balance `20.01 → 20.02` test USDC;
 - receipt status: success (`0x1`).
 
-The server builds and freezes the report before settlement. Its client checks
+The server builds and atomically persists the full frozen report before
+settlement. Its client checks
 origin, redirect, chain, token, payee, price, quote identity, and packet hash
 before signing. If the signed payment does not reach a final receipt inside the
 bounded window, the API returns `payment-uncertain` and instructs the caller to
-check Explorer/nonce state instead of paying again automatically.
+check Explorer/nonce state instead of paying again automatically. A second
+`ProofPurchase` EIP-712 signature explicitly binds the packet hash, payer,
+payee, amount, deadline, EIP-3009 nonce, and session. Recovery accepts only the
+exact original `PAYMENT-SIGNATURE`, retained in browser memory rather than logs
+or storage.
 
 Injective may expose canonical block/state before the public EVM receipt index.
 Proofline therefore confirms anchors with a bounded combination of latest
@@ -100,7 +107,7 @@ receipt. It is accepted only when all three layers pass:
    `evidenceRoot`, Evidence Score, and valid state.
 
 The real run passed all three. See the sanitized
-[end-to-end evidence](../evidence/testnet/real-e2e-2026-07-11.json).
+[no-wallet end-to-end evidence](../data/evidence/featured-proof.json).
 
 ## MCP execution evidence
 
@@ -110,7 +117,8 @@ can complement it with address, balance, token, and network operations.
 
 A reproducible stdio capture pinned the official server at commit
 `f5af39367975872a85b5447cefc9a197f2e635ea`, listed 37 tools, and successfully
-called `address_normalize` and `usdc_native_info` on testnet. The sanitized
+called `address_normalize`, `usdc_native_info`, and `account_balances` on
+testnet. The last call reports the payer's real native INJ and USDC balance. The sanitized
 inputs and outputs are committed in
 [evidence/agent/official-injective-mcp.json](../evidence/agent/official-injective-mcp.json).
 

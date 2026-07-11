@@ -412,7 +412,7 @@ const registryReadAbi = [
 ] as const;
 
 const EXPECTED_REGISTRY_ID = keccak256(
-  stringToHex("proofline.match-proof-registry.v2"),
+  stringToHex("proofline.match-proof-registry.v3"),
 );
 
 const proofStates = ["provisional", "verified", "disputed", "final", "rejected"] as const;
@@ -493,7 +493,7 @@ registerTool(
       ]);
       if (!code || code === "0x") throw new Error("No contract code exists at the configured registry address");
       if (registryId !== EXPECTED_REGISTRY_ID) {
-        throw new Error("Configured contract is not a Proofline MatchProofRegistry v2 instance");
+        throw new Error("Configured contract is not a Proofline MatchProofRegistry v3 instance");
       }
 
       const matchIdHash = keccak256(stringToHex(match_id.trim().toUpperCase()));

@@ -178,8 +178,9 @@ async function fulfillJson(route: Route, body: unknown, status = 200, headers: R
   await route.fulfill({ status, contentType: "application/json", headers, body: JSON.stringify(body) });
 }
 
-async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFailure?: boolean; anchorMode?: "demo" | "injective-testnet"; sessionHeaders?: string[] } = {}) {
+async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFailure?: boolean; anchorMode?: "demo" | "injective-testnet"; sessionHeaders?: string[]; paymentHeaders?: string[] } = {}) {
   let cursor = 0;
+  let paymentFailureInjected = false;
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -226,10 +227,131 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
         liveProviderActive: false,
         disclosure: "No live provider is active.",
         matches: [
-          { ...match, id: "WC-2026-M97-FRA-MAR", season: 2026, competition: "FIFA World Cup 2026", label: "France vs Morocco", homeTeam: "France", awayTeam: "Morocco", venue: "Boston Stadium", status: "finished", score: { home: 2, away: 0 }, scheduledDate: "2026-07-09", scheduledAt: "2026-07-09T20:00:00.000Z", dataMode: "delayed", disclosure: "Delayed snapshot · captured after full time · not a live feed", source },
+          { ...match, id: "WC-2026-M97-FRA-MAR", season: 2026, competition: "FIFA World Cup 2026", label: "France vs Morocco", homeTeam: "France", awayTeam: "Morocco", venue: "Boston Stadium", status: "finished", score: { home: 2, away: 0 }, scheduledDate: "2026-07-09", scheduledAt: "2026-07-09T20:00:00.000Z", dataMode: "delayed", captureMethod: "delayed-snapshot", capturedAt: "2026-07-11T10:38:05.000Z", ageSeconds: 1800, freshnessStatus: "fresh", isCurrent: true, supersededBy: null, disclosure: "Delayed snapshot · captured after full time · not a live feed", source: { ...source, sourceSnapshotHash: source.rawPayloadHash } },
           { ...match, id: "WC-2026-M99-NOR-ENG", season: 2026, competition: "FIFA World Cup 2026", label: "Norway vs England", homeTeam: "Norway", awayTeam: "England", venue: "Miami Stadium", status: "scheduled", score: null, scheduledDate: "2026-07-11", scheduledAt: "2026-07-11T21:00:00.000Z", dataMode: "scheduled", disclosure: "Official schedule snapshot · no live status or score is claimed", source },
           { ...match, scheduledDate: "2022-11-25", scheduledAt: match.startedAt, dataMode: "historical-replay", disclosure: match.replayDisclosure, source },
         ],
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/matches/WC-2026-M97-FRA-MAR")) {
+      const delayedMatch = {
+        ...match,
+        id: "WC-2026-M97-FRA-MAR",
+        season: 2026,
+        competition: "FIFA World Cup 2026",
+        label: "France vs Morocco",
+        homeTeam: "France",
+        awayTeam: "Morocco",
+        venue: "Boston Stadium",
+        status: "finished",
+        score: { home: 2, away: 0 },
+        scheduledDate: "2026-07-09",
+        scheduledAt: "2026-07-09T20:00:00.000Z",
+        dataMode: "delayed",
+        captureMethod: "delayed-snapshot",
+        capturedAt: "2026-07-11T10:38:05.000Z",
+        ageSeconds: 1800,
+        freshnessStatus: "fresh",
+        isCurrent: true,
+        supersededBy: null,
+        disclosure: "Delayed snapshot · captured after full time · not a live feed",
+        source: {
+          provider: "proofline-multi-source-snapshot",
+          label: "ESPN public scoreboard + FIFA official results",
+          url: "https://www.fifa.com/",
+          retrievedAt: "2026-07-11T10:38:05.000Z",
+          rawPayloadHash: `0x${"77".repeat(32)}`,
+          sourceSnapshotHash: `0x${"77".repeat(32)}`,
+          adapterVersion: "proofline-delayed-snapshot@1.0.0",
+        },
+      };
+      const sourceObservation = (id: string, provider: "espn" | "fifa") => ({
+        id,
+        eventId: "final-result",
+        source: {
+          id: provider === "espn" ? "espn-scoreboard" : "fifa-world-cup-match-schedule",
+          label: provider === "espn" ? "ESPN public scoreboard JSON" : "FIFA official fixtures and results",
+          url: provider === "espn" ? "https://site.api.espn.com/" : "https://www.fifa.com/",
+          tier: provider === "espn" ? "licensed" : "official",
+          reliabilityBps: provider === "espn" ? 9200 : 9800,
+          independenceGroup: provider,
+        },
+        receivedAt: "2026-07-11T10:38:05.000Z",
+        provenance: {
+          provider,
+          sourceSnapshotHash: `0x${(provider === "espn" ? "88" : "99").repeat(32)}`,
+          rawPayloadHash: `0x${(provider === "espn" ? "88" : "99").repeat(32)}`,
+          receivedAt: "2026-07-11T10:38:05.000Z",
+          eventOccurredAt: "2026-07-09T22:00:00.000Z",
+          eventOccurredAtBasis: "estimated",
+          adapterVersion: `snapshot:${provider}@1.0.0`,
+          policyConfigHash: `0x${"aa".repeat(32)}`,
+          verifierVersionHash: `0x${"bb".repeat(32)}`,
+          rawPayloadAvailable: true,
+        },
+        payload: {
+          matchId: delayedMatch.id,
+          eventType: "match_end",
+          minute: 90,
+          period: "full-time",
+          score: { home: 2, away: 0 },
+          occurredAt: "2026-07-09T22:00:00.000Z",
+        },
+      });
+      await fulfillJson(route, {
+        mode: "delayed",
+        dataMode: "delayed",
+        disclosure: delayedMatch.disclosure,
+        match: delayedMatch,
+        replay: null,
+        events: [{
+          eventId: "final-result",
+          observations: [sourceObservation("obs-espn", "espn"), sourceObservation("obs-fifa", "fifa")],
+          verification: {
+            eventId: "final-result",
+            canonical: { matchId: delayedMatch.id, eventType: "match_end", minute: 90, period: "full-time", score: { home: 2, away: 0 }, occurredAt: "2026-07-09T22:00:00.000Z", canonicalJson: "{}", eventHash: EVENT_HASH },
+            state: "verified",
+            confidenceBps: 9649,
+            confidenceLabel: "96.5/100",
+            thresholdBps: 8200,
+            agreeingObservationIds: ["obs-espn", "obs-fifa"],
+            agreeingSourceGroups: ["espn", "fifa"],
+            activeObservationCount: 2,
+            conflicts: [],
+            breakdown: { reliabilityBps: 9500, quorumBps: 10000, agreementBps: 10000, freshnessBps: 10000, conflictPenaltyBps: 0 },
+            reasons: ["Independent source groups agree."],
+            verifiedAt: "2026-07-11T10:38:05.000Z",
+          },
+          anchor: null,
+        }],
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/matches/WC-2026-M97-FRA-MAR/verify-anchor")) {
+      await fulfillJson(route, {
+        schema: "proofline.verify-anchor.v1",
+        mode: "delayed",
+        dataMode: "delayed",
+        matchId: "WC-2026-M97-FRA-MAR",
+        eventId: "final-result",
+        evidenceRoot: `0x${"ab".repeat(32)}`,
+        verification: verification(15),
+        anchor: {
+          receipt: {
+            mode: options.live ? "injective-testnet" : "demo",
+            eventHash: EVENT_HASH,
+            confidenceBps: 9649,
+            anchoredAt: "2026-07-11T11:18:00.000Z",
+            confirmed: true,
+            ...(options.live ? { txHash: TX_HASH, explorerUrl: `https://testnet.blockscout.injective.network/tx/${TX_HASH}` } : {}),
+          },
+          simulated: !options.live,
+          disclosure: options.live ? "Injective testnet commitment." : "Deterministic demo commitment.",
+        },
+        decision: { allowed: true, state: "open", reasons: ["Verified and anchored."] },
+        dataSemantics: { dataMode: "delayed", captureMethod: "delayed-snapshot", capturedAt: "2026-07-11T10:38:05.000Z", ageSeconds: 1800, freshnessStatus: "fresh", isFresh: true, isCurrent: true, supersededBy: null, disclosure: "Delayed snapshot." },
+        disclosure: "Verified from frozen ESPN and FIFA snapshots.",
       });
       return;
     }
@@ -242,6 +364,22 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
         verification: record?.verification ?? verification(cursor),
         anchor: record?.anchor ?? null,
         decision: { allowed: cursor >= 15, state: cursor >= 15 ? "open" : "held", reasons: [cursor >= 15 ? "Evidence policy cleared." : "The match is not final."] },
+      });
+      return;
+    }
+    if (url.pathname.endsWith("/proofs/samples/featured")) {
+      await fulfillJson(route, {
+        schema: "proofline.previously-verified-sample.v2",
+        disclosure: "Previously purchased sample; this request executes no payment.",
+        publishedAt: "2026-07-11T12:50:45.743Z",
+        network: "eip155:1439",
+        registry: {},
+        anchor: {},
+        x402: {},
+        proofPurchaseBinding: {},
+        packet: paidPacket().packet,
+        noWalletRequired: true,
+        paymentExecutedByThisRequest: false,
       });
       return;
     }
@@ -270,7 +408,9 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
     }
     if (url.pathname.includes("/proof")) {
       if (request.headers()["payment-signature"]) {
-        if (options.paymentNetworkFailure) {
+        options.paymentHeaders?.push(request.headers()["payment-signature"]!);
+        if (options.paymentNetworkFailure && !paymentFailureInjected) {
+          paymentFailureInjected = true;
           await route.abort("failed");
           return;
         }
@@ -299,18 +439,39 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
 test("match selector exposes delayed 2026 provenance without presenting it as live", async ({ page }) => {
   await mockApi(page);
   await page.goto("/");
-  await page.getByTestId("match-selector").selectOption("WC-2026-M97-FRA-MAR");
+  await expect(page.getByTestId("match-selector")).toHaveValue("WC-2026-M97-FRA-MAR");
   await expect(page.getByTestId("catalog-match-view")).toBeVisible();
   await expect(page.locator("[data-mode='delayed']").first()).toBeVisible();
-  await expect(page.getByText("A recent result with inspectable provenance")).toBeVisible();
-  await expect(page.getByText("Raw payload hash", { exact: true })).toBeVisible();
-  await expect(page.getByText("Result observed, proof workflow not run")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Verify this 2026 result" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Run conflict replay" })).toBeVisible();
+  await expect(page.getByText("ESPN public scoreboard JSON")).toBeVisible();
+  await expect(page.getByText("FIFA official fixtures and results")).toBeVisible();
+  await expect(page.getByText("sourceSnapshotHash", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("Freshness", { exact: true })).toHaveCount(2);
+  await expect(page.locator("[data-freshness='fresh']").first()).toBeVisible();
+  await expect(page.getByTestId("previously-verified-sample")).toContainText("No wallet required");
+  await page.getByTestId("verify-2026-result").click();
+  await expect(page.getByTestId("catalog-audit-result")).toContainText("Independent evidence anchored");
+  await page.getByTestId("open-2026-proof").click();
+  await page.getByTestId("request-proof-report").click();
+  await expect(page.getByText("402", { exact: true })).toBeVisible();
+});
+
+test("previously verified 2026 sample performs a fresh three-layer check without a wallet", async ({ page }) => {
+  await mockApi(page, { live: true, anchorMode: "injective-testnet" });
+  await page.goto("/");
+  const verify = page.getByTestId("verify-published-sample");
+  await expect(verify).toBeVisible();
+  await verify.click();
+  await expect(verify).toContainText("Fresh verification passed");
+  await expect(page.getByText(/No payment was executed/)).toBeVisible();
 });
 
 test("guided replay pauses on the wrong field, corrects it, and keeps external checks pending", async ({ page }) => {
   await mockApi(page);
   await page.goto("/");
 
+  await page.getByTestId("run-conflict-replay").click();
   await expect(page.locator("[data-mode='historical-replay']").first()).toBeVisible();
   await page.getByTestId("run-judge-demo").click();
   await expect(page.getByTestId("conflict-pause")).toContainText("card");
@@ -327,6 +488,7 @@ test("guided replay pauses on the wrong field, corrects it, and keeps external c
 test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, and links the explorer", async ({ page }) => {
   await mockApi(page, { live: true, anchorMode: "injective-testnet" });
   await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
   const openProof = page.getByTestId("open-proof-drawer");
   await expect(openProof).toBeVisible();
   await openProof.click();
@@ -355,7 +517,8 @@ test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, an
 });
 
 test("wallet rejection is an error; post-signature network ambiguity is payment-uncertain with recovery evidence", async ({ page }) => {
-  await mockApi(page, { live: true, paymentNetworkFailure: true });
+  const paymentHeaders: string[] = [];
+  await mockApi(page, { live: true, paymentNetworkFailure: true, paymentHeaders });
   await page.addInitScript(() => {
     window.ethereum = {
       request: async ({ method }: { method: string }) => {
@@ -366,6 +529,7 @@ test("wallet rejection is an error; post-signature network ambiguity is payment-
     };
   });
   await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
   const openProof = page.getByTestId("open-proof-drawer");
   await expect(openProof).toBeVisible();
   await openProof.click();
@@ -383,11 +547,16 @@ test("wallet rejection is an error; post-signature network ambiguity is payment-
   await expect(page.getByTestId("payment-uncertain")).toHaveCount(0);
 
   await page.evaluate(() => {
+    (window as Window & { __prooflineSignCount?: number }).__prooflineSignCount = 0;
     window.ethereum = {
       request: async ({ method }: { method: string }) => {
         if (method === "eth_chainId") return "0x59f";
         if (method === "eth_requestAccounts") return ["0x3333333333333333333333333333333333333333"];
-        if (method === "eth_signTypedData_v4") return `0x${"66".repeat(65)}`;
+        if (method === "eth_signTypedData_v4") {
+          const instrumented = window as Window & { __prooflineSignCount?: number };
+          instrumented.__prooflineSignCount = (instrumented.__prooflineSignCount ?? 0) + 1;
+          return `0x${"66".repeat(65)}`;
+        }
         return null;
       },
     };
@@ -397,6 +566,13 @@ test("wallet rejection is an error; post-signature network ambiguity is payment-
   await expect(page.getByTestId("payment-uncertain")).toBeVisible();
   await expect(page.getByTestId("payment-uncertain")).toContainText("Authorization nonce");
   await expect(page.getByTestId("payment-uncertain")).toContainText("Facilitator / payee");
+  await expect(page.getByTestId("payment-uncertain")).toContainText("memory only");
+  await page.getByTestId("recover-existing-payment").click();
+  await expect(page.getByText("Report delivered")).toBeVisible();
+  expect(await page.evaluate(() => (window as Window & { __prooflineSignCount?: number }).__prooflineSignCount)).toBe(1);
+  expect(paymentHeaders).toHaveLength(2);
+  expect(paymentHeaders[0]).toBe(paymentHeaders[1]);
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => /payment|signature/i.test(key)))).toEqual([]);
 });
 
 test("two browser contexts receive isolated replay session ids", async ({ browser }) => {
@@ -409,8 +585,8 @@ test("two browser contexts receive isolated replay session ids", async ({ browse
   await mockApi(first, { sessionHeaders: firstHeaders });
   await mockApi(second, { sessionHeaders: secondHeaders });
   await Promise.all([first.goto("/"), second.goto("/")]);
-  await expect(first.getByTestId("judge-demo")).toBeVisible();
-  await expect(second.getByTestId("judge-demo")).toBeVisible();
+  await expect(first.getByTestId("catalog-match-view")).toBeVisible();
+  await expect(second.getByTestId("catalog-match-view")).toBeVisible();
   expect(firstHeaders.find(Boolean)).toBeTruthy();
   expect(secondHeaders.find(Boolean)).toBeTruthy();
   expect(firstHeaders.find(Boolean)).not.toBe(secondHeaders.find(Boolean));

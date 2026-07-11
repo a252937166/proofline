@@ -5,10 +5,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApi, type ApiRuntime } from "../src/app.js";
 import { explorerTransaction } from "../src/anchor.js";
+import {
+  attachProofPurchaseBinding,
+  proofPurchaseMessage,
+  signProofPurchase,
+} from "../src/purchase-binding.js";
 
 const MATCH_ID = "WC-2022-WAL-IRN";
-const ISSUER_PRIVATE_KEY =
-  "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a841e889ecbcf9c93f4";
+const ISSUER_PRIVATE_KEY = generatePrivateKey();
 
 describe("Proofline API", () => {
   let runtime: ApiRuntime | undefined;
@@ -28,6 +32,51 @@ describe("Proofline API", () => {
     for (let index = 0; index < active.dataset.frames.length; index += 1) {
       await active.engine.step();
     }
+  }
+
+  async function boundPaymentSignature(input: {
+    accepted: Record<string, unknown>;
+    privateKey: `0x${string}`;
+    sessionId?: string;
+    nonce: `0x${string}`;
+  }): Promise<string> {
+    const account = privateKeyToAccount(input.privateKey);
+    const payee = String(input.accepted.payTo) as `0x${string}`;
+    const amount = String(input.accepted.amount);
+    const packetHash = (
+      input.accepted.extra as { prooflineQuoteId: `0x${string}` }
+    ).prooflineQuoteId;
+    const deadline = "9999999999";
+    const payload = {
+      x402Version: 2,
+      accepted: input.accepted,
+      payload: {
+        signature: "0x12",
+        authorization: {
+          from: account.address,
+          to: payee,
+          value: amount,
+          validAfter: "0",
+          validBefore: deadline,
+          nonce: input.nonce,
+        },
+      },
+    };
+    const binding = await signProofPurchase(
+      input.privateKey,
+      proofPurchaseMessage({
+        sessionId: input.sessionId ?? "default",
+        packetHash,
+        payer: account.address,
+        payee,
+        amount,
+        deadline,
+        usdcNonce: input.nonce,
+      }),
+    );
+    return Buffer.from(
+      JSON.stringify(attachProofPurchaseBinding(payload, binding)),
+    ).toString("base64");
   }
 
   it("boots without credentials and labels mutable replay responses", async () => {
@@ -110,6 +159,103 @@ describe("Proofline API", () => {
         }),
       ]),
     );
+  });
+
+  it("runs the 2026 delayed result through verify, anchor, x402, and packet verification", async () => {
+    const active = boot();
+    const matchId = "WC-2026-M97-FRA-MAR";
+    const eventId = "final-result";
+
+    await request(active.app)
+      .get(`/api/matches/${matchId}/proof?eventId=${eventId}`)
+      .expect(409)
+      .expect((response) => {
+        expect(response.body.error).toBe("proof_anchor_required");
+      });
+
+    const anchored = await request(active.app)
+      .post(`/api/matches/${matchId}/verify-anchor?eventId=${eventId}`)
+      .expect(200);
+    expect(anchored.body).toMatchObject({
+      schema: "proofline.verify-anchor.v1",
+      dataMode: "delayed",
+      matchId,
+      eventId,
+      evidenceRoot: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+      verification: {
+        state: "verified",
+        activeSourceGroupCount: 2,
+      },
+      anchor: { receipt: { mode: "demo", confirmed: true } },
+      decision: { allowed: true, state: "open" },
+      dataSemantics: { captureMethod: "delayed-snapshot" },
+    });
+
+    const proofUrl = `/api/matches/${matchId}/proof?eventId=${eventId}`;
+    const quote = await request(active.app).get(proofUrl).expect(402);
+    const paid = await request(active.app)
+      .get(proofUrl)
+      .set("PAYMENT-SIGNATURE", quote.body.demoSandbox.paymentSignature)
+      .expect(200);
+    expect(paid.body).toMatchObject({
+      schema: "proofline.paid-proof.v1",
+      packet: {
+        schema: "proofline.packet.v1",
+        match: { id: matchId, dataMode: "delayed" },
+        eventId,
+        evidenceRoot: anchored.body.evidenceRoot,
+        issuerKeyId: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+        issuerPolicyVersion: "proofline.issuer-policy.v1",
+        issuedAt: expect.any(String),
+        settlement: { allowed: true },
+      },
+      provenance: {
+        dataMode: "delayed",
+        captureMethod: "delayed-snapshot",
+      },
+    });
+    expect(paid.body.packet.observations).toHaveLength(2);
+
+    const verified = await request(active.app)
+      .post("/api/proofs/verify")
+      .send({ packet: paid.body.packet })
+      .expect(200);
+    expect(verified.body).toMatchObject({
+      valid: true,
+      integrity: { valid: true },
+      signature: {
+        valid: true,
+        trustSource: "current",
+      },
+      onchain: { checked: false, mode: "demo" },
+    });
+  });
+
+  it("publishes a no-wallet 2026 sample without executing another payment", async () => {
+    const active = boot();
+    const sample = await request(active.app)
+      .get("/api/proofs/samples/featured")
+      .expect(200);
+    expect(sample.body).toMatchObject({
+      schema: "proofline.previously-verified-sample.v2",
+      noWalletRequired: true,
+      paymentExecutedByThisRequest: false,
+      registry: {
+        version: "v3",
+        address: "0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1",
+        sourceVerification: "fully-verified",
+      },
+      packet: {
+        match: { id: "WC-2026-M97-FRA-MAR" },
+        packetHash: "0xb8a16fdf1d5b4b282561ccd508671704ccc7f96540b6978a93eb3aa0a5f1be99",
+        issuerSignature: expect.stringMatching(/^0x[0-9a-f]+$/),
+      },
+      freshVerification: {
+        method: "POST",
+        href: "/api/proofs/verify",
+      },
+    });
+    expect(sample.headers["payment-required"]).toBeUndefined();
   });
 
   it("isolates replay cursors between browser sessions", async () => {
@@ -208,6 +354,42 @@ describe("Proofline API", () => {
     });
     expect(JSON.stringify(response.body)).not.toContain("api-football-secret");
     expect(JSON.stringify(response.body)).not.toContain("football-data-secret");
+  });
+
+  it("validates trusted issuer rotation history instead of accepting arbitrary signers", async () => {
+    expect(() =>
+      createApi({
+        env: {
+          NODE_ENV: "test",
+          PROOFLINE_TRUSTED_ISSUER_HISTORY_JSON: JSON.stringify([
+            {
+              keyId: `0x${"1".repeat(64)}`,
+              address: `0x${"2".repeat(40)}`,
+              validFrom: "not-a-date",
+            },
+          ]),
+        },
+      }),
+    ).toThrow("invalid issuer policy entry");
+
+    const active = boot({
+      NODE_ENV: "test",
+      PROOFLINE_TRUSTED_ISSUER_HISTORY_JSON: JSON.stringify([
+        {
+          keyId: `0x${"1".repeat(64)}`,
+          address: `0x${"2".repeat(40)}`,
+          validFrom: "2026-01-01T00:00:00.000Z",
+          revokedAt: "2026-06-01T00:00:00.000Z",
+        },
+      ]),
+    });
+    const integrations = await request(active.app)
+      .get("/api/integrations")
+      .expect(200);
+    expect(integrations.body.issuer).toMatchObject({
+      policyVersion: "proofline.issuer-policy.v1",
+      trustedHistoryCount: 1,
+    });
   });
 
   it("never exposes the server-side Injective RPC credential", async () => {
@@ -413,7 +595,7 @@ describe("Proofline API", () => {
       .expect({
         error: "x402_live_misconfigured",
         message:
-          "X402_MODE=injective-testnet requires X402_PAY_TO plus either X402_FACILITATOR_URL or an inline facilitator key. Production inline settlement also requires X402_RPC_PROXY_TOKEN. The API fails closed and will not fake payment success.",
+          "X402_MODE=injective-testnet requires X402_PAY_TO plus either X402_FACILITATOR_URL or an inline facilitator key. Production also requires PROOFLINE_PROOF_ENTITLEMENT_FILE; inline settlement additionally requires X402_RPC_PROXY_TOKEN. The API fails closed and will not fake payment success.",
       });
   });
 
@@ -531,7 +713,8 @@ describe("Proofline API", () => {
 
   it("settles one concurrent x402 authorization and serves later retries from cache", async () => {
     const payTo = `0x${"9".repeat(40)}`;
-    const payer = `0x${"8".repeat(40)}`;
+    const payerKey = generatePrivateKey();
+    const payer = privateKeyToAccount(payerKey).address;
     const nonce = `0x${"7".repeat(64)}`;
     const transaction = `0x${"6".repeat(64)}`;
     const active = boot({
@@ -586,23 +769,11 @@ describe("Proofline API", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const accepted = quote.body.accepts[0] as Record<string, unknown>;
-    const paymentSignature = Buffer.from(
-      JSON.stringify({
-        x402Version: 2,
-        accepted,
-        payload: {
-          signature: "0x12",
-          authorization: {
-            from: payer,
-            to: payTo,
-            value: "10000",
-            validAfter: "0",
-            validBefore: "9999999999",
-            nonce,
-          },
-        },
-      }),
-    ).toString("base64");
+    const paymentSignature = await boundPaymentSignature({
+      accepted,
+      privateKey: payerKey,
+      nonce,
+    });
 
     const firstRequest = request(active.app)
       .get(proofUrl)
@@ -643,13 +814,29 @@ describe("Proofline API", () => {
       transactionHash: transaction,
       payer: payer.toLowerCase(),
     });
+    const differentAuthorization = await boundPaymentSignature({
+      accepted,
+      privateKey: payerKey,
+      nonce: `0x${"5".repeat(64)}`,
+    });
+    await request(active.app)
+      .get(proofUrl)
+      .set("PAYMENT-SIGNATURE", differentAuthorization)
+      .expect(409)
+      .expect((response) => {
+        expect(response.body).toMatchObject({
+          error: "payment-entitlement-signature-mismatch",
+          paymentState: "settled",
+        });
+      });
     expect(verifyCalls).toBe(1);
     expect(settleCalls).toBe(1);
   });
 
   it("keeps an uncertain facilitator outcome pending and refuses a second settlement", async () => {
     const payTo = `0x${"5".repeat(40)}`;
-    const payer = `0x${"4".repeat(40)}`;
+    const payerKey = generatePrivateKey();
+    const payer = privateKeyToAccount(payerKey).address;
     const active = boot({
       NODE_ENV: "test",
       X402_MODE: "injective-testnet",
@@ -679,23 +866,11 @@ describe("Proofline API", () => {
         throw new Error(`Unexpected mocked facilitator URL: ${url}`);
       }),
     );
-    const paymentSignature = Buffer.from(
-      JSON.stringify({
-        x402Version: 2,
-        accepted: quote.body.accepts[0],
-        payload: {
-          signature: "0x12",
-          authorization: {
-            from: payer,
-            to: payTo,
-            value: "10000",
-            validAfter: "0",
-            validBefore: "9999999999",
-            nonce: `0x${"3".repeat(64)}`,
-          },
-        },
-      }),
-    ).toString("base64");
+    const paymentSignature = await boundPaymentSignature({
+      accepted: quote.body.accepts[0] as Record<string, unknown>,
+      privateKey: payerKey,
+      nonce: `0x${"3".repeat(64)}`,
+    });
 
     const uncertain = await request(active.app)
       .get(proofUrl)
@@ -808,6 +983,18 @@ describe("Proofline API", () => {
     expect(() => createApi({ env: { NODE_ENV: "production" } })).toThrow(
       /PROOFLINE_ISSUER_PRIVATE_KEY is required/,
     );
+  });
+
+  it("rejects an invalid current issuer validity boundary", () => {
+    expect(() =>
+      createApi({
+        env: {
+          NODE_ENV: "test",
+          PROOFLINE_ISSUER_PRIVATE_KEY: ISSUER_PRIVATE_KEY,
+          PROOFLINE_ISSUER_VALID_FROM: "not-a-date",
+        },
+      }),
+    ).toThrow(/PROOFLINE_ISSUER_VALID_FROM/);
   });
 
   it("reports Agent-ready only from a fresh real MCP heartbeat and execution log", async () => {

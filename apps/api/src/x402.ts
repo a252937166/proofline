@@ -9,9 +9,16 @@ import {
 } from "./config.js";
 import {
   parseX402PaymentIdentity,
-  X402SettlementLedger,
   type X402PaymentIdentity,
 } from "./x402-ledger.js";
+import {
+  paymentSignatureHash,
+  ProofEntitlementStore,
+} from "./proof-entitlement-store.js";
+import {
+  proofPurchaseQuoteExtension,
+  verifyProofPurchaseBinding,
+} from "./purchase-binding.js";
 
 const DEMO_PAY_TO = "0x0000000000000000000000000000000000000000";
 const DEMO_DISCLOSURE =
@@ -163,7 +170,7 @@ function augmentOfficialQuote(body: unknown, quoteId: string): unknown {
       ...(source.extensions && typeof source.extensions === "object"
         ? (source.extensions as Record<string, unknown>)
         : {}),
-      proofline: { packetHash: quoteId, frozen: true },
+      proofline: proofPurchaseQuoteExtension(quoteId),
     },
     accepts: source.accepts.map((candidate) => {
       if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
@@ -192,7 +199,7 @@ type OfficialMiddlewareModule = {
 
 function liveMiddleware(
   config: Extract<X402RuntimeConfig, { mode: "live" }>,
-  ledger: X402SettlementLedger,
+  entitlements: ProofEntitlementStore,
 ): RequestHandler {
   if (
     !config.configured ||
@@ -202,7 +209,7 @@ function liveMiddleware(
       res.status(503).json({
         error: "x402_live_misconfigured",
         message:
-          "X402_MODE=injective-testnet requires X402_PAY_TO plus either X402_FACILITATOR_URL or an inline facilitator key. Production inline settlement also requires X402_RPC_PROXY_TOKEN. The API fails closed and will not fake payment success.",
+          "X402_MODE=injective-testnet requires X402_PAY_TO plus either X402_FACILITATOR_URL or an inline facilitator key. Production also requires PROOFLINE_PROOF_ENTITLEMENT_FILE; inline settlement additionally requires X402_RPC_PROXY_TOKEN. The API fails closed and will not fake payment success.",
       });
     };
   }
@@ -271,14 +278,44 @@ function liveMiddleware(
         });
         return;
       }
+      const purchase = await verifyProofPurchaseBinding(supplied, {
+        sessionId,
+        packetHash: identity.packetHash,
+        payer: identity.payer,
+        payee: config.payTo!,
+        amount: X402_PRICE_ATOMIC,
+        usdcNonce: identity.nonce,
+      });
+      if (!purchase.valid) {
+        res.status(409).json({
+          error: "proof_purchase_binding_invalid",
+          message: purchase.error,
+          paymentState: "not-submitted",
+          disclosure:
+            "The independent ProofPurchase EIP-712 signature did not bind this packet, payer, payee, amount, deadline, session, and USDC nonce. No facilitator call was made.",
+        });
+        return;
+      }
       let decision;
       try {
-        decision = ledger.begin(identity);
+        decision = entitlements.beginPayment(
+          identity,
+          paymentSignatureHash(supplied),
+          purchase.purchaseSignatureHash,
+        );
       } catch {
         res.status(503).json({
-          error: "payment-ledger-unavailable",
+          error: "proof-entitlement-store-unavailable",
           message:
             "The server could not durably reserve this payment authorization. No facilitator call was made; do not retry until storage is healthy.",
+        });
+        return;
+      }
+      if (decision.status === "missing") {
+        res.status(409).json({
+          error: "frozen_proof_entitlement_missing",
+          message:
+            "The full frozen proof packet and quote are not present in durable storage. No facilitator call was made; request a fresh unsigned quote.",
         });
         return;
       }
@@ -294,16 +331,24 @@ function liveMiddleware(
         return;
       }
       if (decision.status === "settled") {
-        if (decision.conflict === "nonce") {
+        if (
+          decision.conflict === "nonce" ||
+          !decision.samePayer ||
+          !decision.sameAuthorization
+        ) {
           res.status(409).json({
-            error: "payment-nonce-already-settled",
+            error:
+              decision.conflict === "nonce"
+                ? "payment-nonce-already-settled"
+                : "payment-entitlement-signature-mismatch",
             paymentState: "settled",
             message:
-              "This EIP-3009 nonce belongs to a different settled proof purchase. No facilitator call was made.",
+              "Only the exact settled PAYMENT-SIGNATURE may recover this proof entitlement. No facilitator call was made.",
           });
           return;
         }
         const record = decision.record;
+        res.locals.packet = record.packet;
         const payment: PaymentResult = {
           mode: "live",
           simulated: false,
@@ -313,7 +358,7 @@ function liveMiddleware(
           ...(record.transactionHash
             ? { transactionHash: record.transactionHash }
             : {}),
-          payer: record.payer,
+          ...(record.payer ? { payer: record.payer } : {}),
           disclosure:
             "Already paid: Proofline served the frozen packet from its settlement ledger without calling the facilitator or transferring USDC again.",
         };
@@ -330,6 +375,14 @@ function liveMiddleware(
         });
         res.set("PAYMENT-RESPONSE", cachedReceipt);
         res.set("X-PAYMENT-RESPONSE", cachedReceipt);
+        res.once("finish", () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) return;
+          try {
+            entitlements.markDelivered(record.sessionId, record.packetHash);
+          } catch {
+            // Settlement remains cached even if delivery timestamp persistence fails.
+          }
+        });
         next();
         return;
       }
@@ -371,14 +424,14 @@ function liveMiddleware(
           try {
             // Official verification rejected before its settle step. Only this
             // explicit pre-settlement outcome is safe to release for a fresh try.
-            ledger.releaseUnsettled(identity);
+            entitlements.releaseVerifiedRejection(identity);
             settlementStarted = false;
           } catch {
             res.removeHeader("PAYMENT-REQUIRED");
             res.removeHeader("X-PAYMENT-REQUIRED");
             res.status(503);
             return originalJson({
-              error: "payment-ledger-unavailable",
+              error: "proof-entitlement-store-unavailable",
               paymentState: "pending-uncertain",
               message:
                 "Payment verification failed, but the durable pending record could not be cleared. Do not retry until chain and ledger state are reconciled.",
@@ -386,6 +439,26 @@ function liveMiddleware(
           }
         }
         const augmented = augmentOfficialQuote(body, quoteId);
+        if (!supplied) {
+          try {
+            entitlements.freezeQuote({
+              sessionId,
+              packetHash: quoteId as `0x${string}`,
+              packet: res.locals.packet,
+              quote: augmented,
+              expiresAt: new Date(Date.now() + 5 * 60 * 1_000),
+            });
+          } catch {
+            res.removeHeader("PAYMENT-REQUIRED");
+            res.removeHeader("X-PAYMENT-REQUIRED");
+            res.status(503);
+            return originalJson({
+              error: "proof-entitlement-store-unavailable",
+              message:
+                "The frozen packet and quote could not be durably stored, so payment authorization is disabled for this request.",
+            });
+          }
+        }
         const encoded = base64(augmented);
         res.set("PAYMENT-REQUIRED", encoded);
         res.set("X-PAYMENT-REQUIRED", encoded);
@@ -420,7 +493,7 @@ function liveMiddleware(
             return;
           }
           try {
-            ledger.markSettled(
+            entitlements.markSettled(
               identity,
               transactionHash as `0x${string}`,
             );
@@ -429,7 +502,7 @@ function liveMiddleware(
             clearSettlementTimer();
             if (!timedOut && !res.headersSent) {
               res.status(503).json({
-                error: "payment-ledger-unavailable",
+                error: "proof-entitlement-store-unavailable",
                 paymentState: "settled-or-pending-uncertain",
                 transactionHash,
                 message:
@@ -452,6 +525,19 @@ function liveMiddleware(
             "Official @injectivelabs/x402 Injective testnet settlement. PAYMENT-RESPONSE is the payment receipt; an anchor transaction, when present, is a separate transaction.",
         };
         res.locals.payment = payment;
+        if (identity) {
+          res.once("finish", () => {
+            if (res.statusCode < 200 || res.statusCode >= 300) return;
+            try {
+              entitlements.markDelivered(
+                identity!.sessionId,
+                identity!.packetHash,
+              );
+            } catch {
+              // The settled entitlement remains recoverable without deliveredAt.
+            }
+          });
+        }
         next();
       });
     } catch (error) {
@@ -462,7 +548,7 @@ function liveMiddleware(
       // the settlement boundary may have been crossed.
       if (identity && settlementStarted && !officialStarted) {
         try {
-          ledger.releaseUnsettled(identity);
+          entitlements.releaseVerifiedRejection(identity);
         } catch {
           // The pending record intentionally remains fail closed.
         }
@@ -480,12 +566,89 @@ function liveMiddleware(
 
 export function createX402Middleware(
   config: X402RuntimeConfig,
-  ledger?: X402SettlementLedger,
+  entitlements?: ProofEntitlementStore,
 ): RequestHandler {
   return config.mode === "live"
     ? liveMiddleware(
         config,
-        ledger ?? new X402SettlementLedger(config.ledgerFile),
+        entitlements ?? new ProofEntitlementStore(config.entitlementFile),
       )
     : demoMiddleware();
+}
+
+export function createProofEntitlementStore(
+  config: X402RuntimeConfig,
+): ProofEntitlementStore {
+  return new ProofEntitlementStore(
+    config.mode === "live" ? config.entitlementFile : undefined,
+  );
+}
+
+/**
+ * Insert before prepareProof. When it restores a settled entitlement,
+ * prepareProof should honor res.locals.proofEntitlementRecovered and call next
+ * without consulting its volatile frozen quote map. The normal x402 middleware
+ * then returns the cached receipt and the persisted packet.
+ */
+export function createProofEntitlementRecoveryMiddleware(
+  config: X402RuntimeConfig,
+  entitlements: ProofEntitlementStore,
+): RequestHandler {
+  if (config.mode !== "live" || !config.payTo) {
+    return (_req, _res, next) => next();
+  }
+  return async (req, res, next) => {
+    const supplied =
+      req.get("PAYMENT-SIGNATURE") ?? req.get("X-PAYMENT") ?? undefined;
+    if (!supplied) {
+      next();
+      return;
+    }
+    const sessionId = req.get("X-Proofline-Session")?.trim() || "default";
+    const record = entitlements.findByPaymentSignature(supplied, sessionId);
+    if (!record) {
+      next();
+      return;
+    }
+    if (record.status === "pending") {
+      res.status(409).json({
+        error: "payment-pending",
+        paymentState: "pending-uncertain",
+        packetHash: record.packetHash,
+        message:
+          "This exact PAYMENT-SIGNATURE was pending when the service restarted. No facilitator call was made; reconcile chain state before retrying.",
+      });
+      return;
+    }
+    if (
+      record.status !== "settled" ||
+      !record.payer ||
+      !record.nonce ||
+      !record.amount
+    ) {
+      next();
+      return;
+    }
+    const binding = await verifyProofPurchaseBinding(supplied, {
+      sessionId,
+      packetHash: record.packetHash,
+      payer: record.payer,
+      payee: config.payTo!,
+      amount: record.amount,
+      usdcNonce: record.nonce,
+    });
+    if (!binding.valid) {
+      res.status(409).json({
+        error: "proof_purchase_binding_invalid",
+        message: binding.error,
+        paymentState: "settled-signature-rejected",
+      });
+      return;
+    }
+    res.locals.packet = record.packet;
+    res.locals.proofQuoteId = record.packetHash;
+    res.locals.proofEntitlementRecovered = true;
+    res.locals.proofEntitlementQuote = record.quote;
+    next();
+  };
 }

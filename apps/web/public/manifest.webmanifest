@@ -1,0 +1,14 @@
+{
+  "name": "Proofline · Match evidence control room",
+  "short_name": "Proofline",
+  "description": "Verify World Cup results across independent sources before an AI Agent can settle.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#071A2B",
+  "theme_color": "#071A2B",
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

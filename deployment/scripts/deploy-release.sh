@@ -148,6 +148,7 @@ for expected_file in \
   "${API_STAGE}/data/replays/wales-iran-2022.json" \
   "${API_STAGE}/data/schedules/world-cup-2026.json" \
   "${API_STAGE}/data/snapshots/france-morocco-2026.json" \
+  "${API_STAGE}/data/evidence/featured-proof.json" \
   "${API_STAGE}/package.json" \
   "${API_STAGE}/package-lock.json" \
   "${WEB_STAGE}/RELEASE" \

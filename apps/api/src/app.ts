@@ -9,12 +9,13 @@ import { timingSafeEqual } from "node:crypto";
 
 import {
   decideSettlement,
+  issuerKeyId,
   verifyProofPacket,
-  verifyEvent,
   type ProofPacket,
   type DataMode,
   type MatchCatalogEntry,
   type ReplayDataset,
+  type TrustedIssuerHistoryEntry,
 } from "@proofline/core";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import type { Hex } from "viem";
@@ -29,10 +30,12 @@ import {
 } from "./config.js";
 import {
   loadDelayedSnapshot,
+  loadFeaturedProofSample,
   loadReplayDataset,
   loadScheduledMatches,
   replayCatalogEntry,
   type DelayedSnapshot,
+  type FeaturedProofSample,
 } from "./data.js";
 import { integrationStatus } from "./integrations.js";
 import { ReplayEngine } from "./replay.js";
@@ -45,6 +48,12 @@ import {
   createX402Middleware,
   type PaymentResult,
 } from "./x402.js";
+import { ProofEntitlementStore } from "./proof-entitlement-store.js";
+import {
+  buildProofSubjectPacket,
+  createDelayedSnapshotProofSubject,
+} from "./proof-subject.js";
+import type { AnchorRecord } from "./api-types.js";
 
 export interface ApiOptions {
   config?: RuntimeConfig;
@@ -53,6 +62,7 @@ export interface ApiOptions {
   env?: NodeJS.ProcessEnv;
   scheduledMatches?: MatchCatalogEntry[];
   delayedSnapshot?: DelayedSnapshot;
+  featuredProofSample?: FeaturedProofSample;
 }
 
 export interface ApiRuntime {
@@ -61,20 +71,15 @@ export interface ApiRuntime {
   config: RuntimeConfig;
   dataset: ReplayDataset;
   anchorService: AnchorService;
-  issuer: { address: `0x${string}`; persistent: boolean };
+  issuer: {
+    address: `0x${string}`;
+    keyId: `0x${string}`;
+    persistent: boolean;
+  };
   dispose(): void;
 }
 
-interface FrozenProofQuote {
-  sessionId: string;
-  matchId: string;
-  eventId: string;
-  packet: ProofPacket;
-  expiresAt: number;
-}
-
 const PROOF_QUOTE_TTL_MS = 5 * 60 * 1_000;
-const MAX_FROZEN_PROOF_QUOTES = 256;
 const MAX_REPLAY_SESSIONS = 64;
 const REPLAY_SESSION_TTL_MS = 60 * 60 * 1_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
@@ -124,6 +129,11 @@ function isProofPacket(value: unknown): value is ProofPacket {
     /^0x[0-9a-fA-F]{64}$/.test(packet.evidenceRoot) &&
     typeof packet.issuerAddress === "string" &&
     /^0x[0-9a-fA-F]{40}$/.test(packet.issuerAddress) &&
+    typeof packet.issuerKeyId === "string" &&
+    /^0x[0-9a-fA-F]{64}$/.test(packet.issuerKeyId) &&
+    packet.issuerPolicyVersion === "proofline.issuer-policy.v1" &&
+    typeof packet.issuedAt === "string" &&
+    Number.isFinite(new Date(packet.issuedAt).getTime()) &&
     typeof packet.issuerSignature === "string" &&
     /^0x[0-9a-fA-F]{130}$/.test(packet.issuerSignature) &&
     packet.signatureScheme === "eip712" &&
@@ -132,6 +142,48 @@ function isProofPacket(value: unknown): value is ProofPacket {
     Boolean(packet.verification) &&
     Array.isArray(packet.observations)
   );
+}
+
+function readTrustedIssuerHistory(
+  value: string | undefined,
+): TrustedIssuerHistoryEntry[] {
+  if (!value?.trim()) return [];
+  if (value.length > 32_768) {
+    throw new Error("PROOFLINE_TRUSTED_ISSUER_HISTORY_JSON is too large");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("PROOFLINE_TRUSTED_ISSUER_HISTORY_JSON must be valid JSON");
+  }
+  if (!Array.isArray(parsed) || parsed.length > 32) {
+    throw new Error(
+      "PROOFLINE_TRUSTED_ISSUER_HISTORY_JSON must be an array with at most 32 entries",
+    );
+  }
+  const entries = parsed as Array<Partial<TrustedIssuerHistoryEntry>>;
+  if (
+    !entries.every(
+      (entry) =>
+        typeof entry.keyId === "string" &&
+        /^0x[0-9a-fA-F]{64}$/.test(entry.keyId) &&
+        typeof entry.address === "string" &&
+        /^0x[0-9a-fA-F]{40}$/.test(entry.address) &&
+        typeof entry.validFrom === "string" &&
+        Number.isFinite(new Date(entry.validFrom).getTime()) &&
+        (entry.revokedAt === undefined ||
+          (typeof entry.revokedAt === "string" &&
+            Number.isFinite(new Date(entry.revokedAt).getTime()) &&
+            new Date(entry.revokedAt).getTime() >
+              new Date(entry.validFrom).getTime())),
+    )
+  ) {
+    throw new Error(
+      "PROOFLINE_TRUSTED_ISSUER_HISTORY_JSON contains an invalid issuer policy entry",
+    );
+  }
+  return structuredClone(entries) as TrustedIssuerHistoryEntry[];
 }
 
 function asyncHandler(
@@ -152,6 +204,11 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
   const dataset = options.dataset ?? loadReplayDataset();
   const scheduledMatches = options.scheduledMatches ?? loadScheduledMatches();
   const delayedSnapshot = options.delayedSnapshot ?? loadDelayedSnapshot();
+  const featuredProofSample =
+    options.featuredProofSample ?? loadFeaturedProofSample();
+  if (!isProofPacket(featuredProofSample.packet)) {
+    throw new Error("Featured proof sample does not contain a valid signed packet");
+  }
   const anchorService =
     options.anchorService ?? createAnchorService(config.anchor);
   const configuredIssuerKey = env.PROOFLINE_ISSUER_PRIVATE_KEY?.trim();
@@ -174,10 +231,24 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
   const issuerPrivateKey = (
     issuerPersistent ? configuredIssuerKey : generatePrivateKey()
   ) as Hex;
+  const issuerAccount = privateKeyToAccount(issuerPrivateKey);
+  const configuredIssuerValidFrom =
+    env.PROOFLINE_ISSUER_VALID_FROM?.trim() ||
+    "1970-01-01T00:00:00.000Z";
+  if (!Number.isFinite(new Date(configuredIssuerValidFrom).getTime())) {
+    throw new Error(
+      "PROOFLINE_ISSUER_VALID_FROM must be a valid ISO timestamp",
+    );
+  }
   const issuer = {
-    address: privateKeyToAccount(issuerPrivateKey).address,
+    address: issuerAccount.address,
+    keyId: issuerKeyId(issuerAccount.address),
     persistent: issuerPersistent,
+    validFrom: new Date(configuredIssuerValidFrom).toISOString(),
   };
+  const trustedIssuerHistory = readTrustedIssuerHistory(
+    env.PROOFLINE_TRUSTED_ISSUER_HISTORY_JSON,
+  );
   const engine = new ReplayEngine(
     dataset,
     anchorService,
@@ -188,9 +259,20 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     string,
     { engine: ReplayEngine; touchedAt: number }
   >();
-  const frozenProofQuotes = new Map<string, FrozenProofQuote>();
-  const frozenQuoteKey = (sessionId: string, quoteId: `0x${string}`) =>
-    `${sessionId}:${quoteId.toLowerCase()}`;
+  const entitlementFile =
+    config.x402.mode === "live"
+      ? config.x402.entitlementFile
+      : env.PROOFLINE_PROOF_ENTITLEMENT_FILE?.trim();
+  if (
+    env.NODE_ENV === "production" &&
+    config.x402.mode === "live" &&
+    !entitlementFile
+  ) {
+    throw new Error(
+      "PROOFLINE_PROOF_ENTITLEMENT_FILE is required for durable production x402 delivery and recovery.",
+    );
+  }
+  const proofEntitlements = new ProofEntitlementStore(entitlementFile);
   const replayFor = (req: Request): ReplayEngine => {
     const sessionId = requestSessionId(req);
     if (sessionId === "default") return engine;
@@ -226,7 +308,6 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     engine.dispose();
     for (const session of replaySessions.values()) session.engine.dispose();
     replaySessions.clear();
-    frozenProofQuotes.clear();
   };
   const app = express();
   const paidProofWindows = new Map<string, number[]>();
@@ -395,26 +476,35 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
   const scheduledById = new Map(
     scheduledMatches.map((match) => [match.id, match]),
   );
-  const delayedVerification = () =>
-    verifyEvent(delayedSnapshot.eventId, delayedSnapshot.observations, {
-      now: new Date(
-        delayedSnapshot.observations.reduce(
-          (latest, observation) =>
-            Math.max(latest, new Date(observation.receivedAt).getTime()),
-          0,
-        ),
-      ),
+  const delayedSubject = createDelayedSnapshotProofSubject(delayedSnapshot);
+  let delayedAnchor: AnchorRecord | null = null;
+  let delayedAnchorPromise: Promise<AnchorRecord> | null = null;
+  const ensureDelayedAnchor = async (): Promise<AnchorRecord> => {
+    if (delayedAnchor) return structuredClone(delayedAnchor);
+    delayedAnchorPromise ??= anchorService.anchor({
+      matchId: delayedSubject.match.id,
+      verification: delayedSubject.verification,
+      evidenceRoot: delayedSubject.evidenceRoot,
+      anchoredAt: new Date().toISOString(),
     });
+    try {
+      delayedAnchor = await delayedAnchorPromise;
+      return structuredClone(delayedAnchor);
+    } finally {
+      delayedAnchorPromise = null;
+    }
+  };
   const delayedEvent = () => {
-    const verification = delayedVerification();
+    const verification = structuredClone(delayedSubject.verification);
     return {
       eventId: delayedSnapshot.eventId,
       observations: structuredClone(delayedSnapshot.observations),
       verification,
-      anchor: null,
+      anchor: delayedAnchor ? structuredClone(delayedAnchor) : null,
       decision: decideSettlement(
         verification,
         delayedSnapshot.match.status,
+        delayedAnchor?.receipt,
       ),
     };
   };
@@ -442,6 +532,7 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
       ...integrationStatus(config, anchorService, env),
       issuer: {
         address: issuer.address,
+        keyId: issuer.keyId,
         signatureScheme: "eip712",
         persistent: issuer.persistent,
         status: issuer.persistent ? "configured" : "ephemeral",
@@ -449,12 +540,32 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
         disclosure: issuer.persistent
           ? "Proof packets are signed by the configured persistent issuer."
           : "Proof packets are signed by an ephemeral process issuer. Configure PROOFLINE_ISSUER_PRIVATE_KEY before publishing durable evidence.",
+        policyVersion: "proofline.issuer-policy.v1",
+        validFrom: issuer.validFrom,
+        validFromEnvironmentVariable: "PROOFLINE_ISSUER_VALID_FROM",
+        trustedHistoryCount: trustedIssuerHistory.length,
+        historyEnvironmentVariable:
+          "PROOFLINE_TRUSTED_ISSUER_HISTORY_JSON",
       },
     });
   });
 
   app.get("/api/mcp/runtime", (_req, res) => {
     res.json(mcpRuntime.snapshot());
+  });
+
+  app.get("/api/proofs/samples/featured", (_req, res) => {
+    res.set("Cache-Control", "public, max-age=300, stale-while-revalidate=3600");
+    res.json({
+      ...featuredProofSample,
+      noWalletRequired: true,
+      paymentExecutedByThisRequest: false,
+      freshVerification: {
+        method: "POST",
+        href: "/api/proofs/verify",
+        body: { packet: featuredProofSample.packet },
+      },
+    });
   });
 
   app.post("/api/mcp/runtime/heartbeat", (req, res) => {
@@ -755,6 +866,53 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     res.status(404).json({ error: "match_not_found" });
   });
 
+  app.post(
+    "/api/matches/:matchId/verify-anchor",
+    asyncHandler(async (req, res) => {
+      const eventId =
+        typeof req.query.eventId === "string"
+          ? req.query.eventId
+          : delayedSnapshot.eventId;
+      if (!validEventId(eventId)) {
+        res.status(400).json({ error: "invalid_event_id" });
+        return;
+      }
+      if (req.params.matchId !== delayedSnapshot.match.id) {
+        res.status(404).json({ error: "match_not_found" });
+        return;
+      }
+      if (eventId !== delayedSnapshot.eventId) {
+        res.status(404).json({ error: "event_not_found" });
+        return;
+      }
+      if (delayedSubject.verification.state !== "verified") {
+        res.status(409).json({
+          error: "evidence_not_verified",
+          message:
+            "The delayed result has not cleared the independent-source verification policy and cannot be anchored.",
+        });
+        return;
+      }
+      const anchor = await ensureDelayedAnchor();
+      const event = delayedEvent();
+      setDataMode(res, "delayed");
+      res.json({
+        schema: "proofline.verify-anchor.v1",
+        mode: "delayed",
+        dataMode: "delayed",
+        matchId: delayedSnapshot.match.id,
+        eventId,
+        evidenceRoot: delayedSubject.evidenceRoot,
+        verification: event.verification,
+        anchor,
+        decision: event.decision,
+        dataSemantics: delayedSubject.dataSemantics,
+        disclosure:
+          "The sporting result was verified from the frozen ESPN and FIFA snapshots. Injective proves the commitment and revision order, not the source fact by itself.",
+      });
+    }),
+  );
+
   app.get("/api/replay/state", (req, res) => {
     res.json(replayFor(req).snapshot());
   });
@@ -832,7 +990,10 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     const replay = replayFor(req);
     const sessionId = requestSessionId(req);
     const matchId = req.params["matchId"];
-    if (typeof matchId !== "string" || !replay.getMatch(matchId)) {
+    const isReplayMatch =
+      typeof matchId === "string" && Boolean(replay.getMatch(matchId));
+    const isDelayedMatch = matchId === delayedSnapshot.match.id;
+    if (typeof matchId !== "string" || (!isReplayMatch && !isDelayedMatch)) {
       res.status(404).json({ error: "match_not_found" });
       return;
     }
@@ -850,31 +1011,81 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
 
     if (hasPayment) {
       const quoteId = paymentQuoteId(req);
-      const quoteKey = quoteId ? frozenQuoteKey(sessionId, quoteId) : undefined;
-      const frozen = quoteKey ? frozenProofQuotes.get(quoteKey) : undefined;
+      const frozen = quoteId
+        ? proofEntitlements.find(sessionId, quoteId)
+        : undefined;
+      const packet = frozen?.packet;
+      const quoteExpired =
+        frozen?.status === "quoted" &&
+        Boolean(
+          frozen.expiresAt && Date.parse(frozen.expiresAt) <= Date.now(),
+        );
       if (
         !quoteId ||
         !frozen ||
-        frozen.expiresAt <= Date.now() ||
-        frozen.sessionId !== sessionId ||
-        frozen.matchId !== matchId ||
-        frozen.eventId !== eventId
+        quoteExpired ||
+        !isProofPacket(packet) ||
+        packet.match.id !== matchId ||
+        packet.eventId !== eventId
       ) {
-        if (quoteKey) frozenProofQuotes.delete(quoteKey);
         res.status(409).json({
           error: "proof_quote_missing_or_expired",
           message:
-            "The payment is not bound to an active frozen proof quote. Request a fresh 402 before signing; no payment was processed.",
+            "The payment is not bound to a durable frozen proof quote for this match and event. Request a fresh 402 before signing; no payment was processed.",
         });
         return;
       }
-      res.locals.packet = frozen.packet;
+      res.locals.packet = packet;
       res.locals.proofQuoteId = quoteId;
+      res.locals.proofProvenance = isDelayedMatch
+        ? {
+            ...delayedSubject.dataSemantics,
+            sourceNotice: delayedSubject.match.sourceNotice,
+          }
+        : {
+            dataMode: "historical-replay",
+            disclosure: dataset.match.replayDisclosure,
+            sourceNotice: dataset.match.sourceNotice,
+          };
       next();
       return;
     }
 
-    const packet = await replay.proofPacket(eventId);
+    let packet: ProofPacket | null;
+    if (isDelayedMatch) {
+      if (eventId !== delayedSnapshot.eventId) {
+        res.status(404).json({ error: "proof_event_not_found" });
+        return;
+      }
+      if (!delayedAnchor) {
+        res.status(409).json({
+          error: "proof_anchor_required",
+          message:
+            "Verify and anchor this 2026 result before requesting its x402 proof quote.",
+          action: {
+            method: "POST",
+            href: `/api/matches/${encodeURIComponent(matchId)}/verify-anchor?eventId=${encodeURIComponent(eventId)}`,
+          },
+        });
+        return;
+      }
+      packet = await buildProofSubjectPacket({
+        subject: delayedSubject,
+        issuerPrivateKey,
+        anchor: delayedAnchor.receipt,
+      });
+      res.locals.proofProvenance = {
+        ...delayedSubject.dataSemantics,
+        sourceNotice: delayedSubject.match.sourceNotice,
+      };
+    } else {
+      packet = await replay.proofPacket(eventId);
+      res.locals.proofProvenance = {
+        dataMode: "historical-replay",
+        disclosure: dataset.match.replayDisclosure,
+        sourceNotice: dataset.match.sourceNotice,
+      };
+    }
     if (!packet) {
       res.status(404).json({
         error: "proof_event_not_found",
@@ -884,20 +1095,17 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
       return;
     }
     const now = Date.now();
-    for (const [quoteId, frozen] of frozenProofQuotes) {
-      if (frozen.expiresAt <= now) frozenProofQuotes.delete(quoteId);
-    }
-    while (frozenProofQuotes.size >= MAX_FROZEN_PROOF_QUOTES) {
-      const oldest = frozenProofQuotes.keys().next().value as string | undefined;
-      if (!oldest) break;
-      frozenProofQuotes.delete(oldest);
-    }
-    frozenProofQuotes.set(frozenQuoteKey(sessionId, packet.packetHash), {
+    proofEntitlements.freezeQuote({
       sessionId,
-      matchId,
-      eventId,
+      packetHash: packet.packetHash,
       packet,
-      expiresAt: now + PROOF_QUOTE_TTL_MS,
+      quote: {
+        schema: "proofline.prepared-quote.v1",
+        matchId,
+        eventId,
+      },
+      quotedAt: new Date(now),
+      expiresAt: new Date(now + PROOF_QUOTE_TTL_MS),
     });
     res.locals.packet = packet;
     res.locals.proofQuoteId = packet.packetHash;
@@ -908,7 +1116,7 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     "/api/matches/:matchId/proof",
     paidProofRateLimit,
     prepareProof,
-    createX402Middleware(config.x402),
+    createX402Middleware(config.x402, proofEntitlements),
     (_req, res) => {
       const packet = res.locals.packet as ProofPacket;
       const payment = res.locals.payment as PaymentResult;
@@ -921,9 +1129,7 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
           frozen: true,
         },
         provenance: {
-          dataMode: "historical-replay",
-          disclosure: dataset.match.replayDisclosure,
-          sourceNotice: dataset.match.sourceNotice,
+          ...(res.locals.proofProvenance as Record<string, unknown>),
           trustBoundary:
             "A matching anchor proves hash commitment at a time; source agreement and the verifier establish evidence quality.",
         },
@@ -949,6 +1155,8 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     try {
       const report = await verifyProofPacket(candidate, new Date(), {
         expectedIssuerAddress: issuer.address,
+        expectedIssuerValidFrom: issuer.validFrom,
+        trustedIssuerHistory,
       });
       let onchain: Record<string, unknown>;
       if (candidate.anchor?.mode !== "injective-testnet") {

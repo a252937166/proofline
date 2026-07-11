@@ -1,87 +1,590 @@
 {
-  "schema": "proofline.mcp-execution-evidence.v1",
-  "capturedAt": "2026-07-11T11:18:49.438Z",
+  "schema": "proofline.mcp-execution-evidence.v2",
+  "capturedAt": "2026-07-11T13:17:23.328Z",
   "client": {
     "name": "proofline-judge-evidence-client",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "transport": "stdio"
   },
   "server": {
     "name": "proofline",
     "version": "0.2.0",
     "reportedToolCount": 10,
-    "runtimeHeartbeat": "online",
     "sessionId": "proofline-testnet-judge"
+  },
+  "anchorPreparation": {
+    "schema": "proofline.verify-anchor.v1",
+    "mode": "delayed",
+    "dataMode": "delayed",
+    "matchId": "WC-2026-M97-FRA-MAR",
+    "eventId": "final-result",
+    "evidenceRoot": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3",
+    "verification": {
+      "eventId": "final-result",
+      "canonical": {
+        "matchId": "WC-2026-M97-FRA-MAR",
+        "eventType": "match_end",
+        "minute": 90,
+        "period": "full-time",
+        "score": {
+          "home": 2,
+          "away": 0
+        },
+        "occurredAt": "2026-07-09T22:00:00.000Z",
+        "canonicalJson": "{\"schema\":\"proofline.event.v1\",\"matchId\":\"wc-2026-m97-fra-mar\",\"eventType\":\"match_end\",\"minute\":90,\"stoppage\":null,\"period\":\"full-time\",\"team\":null,\"player\":null,\"relatedPlayer\":null,\"card\":null,\"score\":{\"home\":2,\"away\":0,\"homePenalties\":null,\"awayPenalties\":null},\"occurredAt\":\"2026-07-09T22:00:00.000Z\"}",
+        "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30"
+      },
+      "state": "verified",
+      "confidenceBps": 9825,
+      "evidenceScore": 98.25,
+      "confidenceLabel": "98.3/100",
+      "thresholdBps": 8200,
+      "thresholdScore": 82,
+      "agreeingObservationIds": [
+        "obs-2026-m97-result-espn",
+        "obs-2026-m97-result-fifa"
+      ],
+      "agreeingSourceGroups": [
+        "espn",
+        "fifa"
+      ],
+      "activeObservationCount": 2,
+      "activeSourceGroupCount": 2,
+      "conflicts": [],
+      "breakdown": {
+        "reliabilityBps": 9500,
+        "quorumBps": 10000,
+        "agreementBps": 10000,
+        "freshnessBps": 10000,
+        "conflictPenaltyBps": 0
+      },
+      "reasons": [
+        "Independent sources agree and the confidence threshold is satisfied."
+      ],
+      "verifiedAt": "2026-07-11T10:38:05.000Z"
+    },
+    "anchor": {
+      "receipt": {
+        "mode": "injective-testnet",
+        "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30",
+        "evidenceRoot": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3",
+        "confidenceBps": 9825,
+        "anchoredAt": "2026-07-11T12:50:04.000Z",
+        "confirmed": true,
+        "contractAddress": "0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1",
+        "txHash": "0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+        "blockNumber": "133197482",
+        "explorerUrl": "https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+        "receiptIndexing": "explorer-api-and-rpc-state"
+      },
+      "simulated": false,
+      "disclosure": "Injective EVM testnet commitment already existed as the match-wide latest revision; its original canonical transaction was recovered from the official Explorer API."
+    },
+    "decision": {
+      "allowed": true,
+      "state": "open",
+      "reasons": [
+        "Result is final, verified, and anchored."
+      ]
+    },
+    "dataSemantics": {
+      "dataMode": "delayed",
+      "captureMethod": "delayed-snapshot",
+      "capturedAt": "2026-07-11T10:38:05.000Z",
+      "ageSeconds": 9466,
+      "freshnessStatus": "stale",
+      "isFresh": false,
+      "isCurrent": false,
+      "supersededBy": null,
+      "disclosure": "Delayed snapshot · captured after full time · not a live feed"
+    },
+    "disclosure": "The sporting result was verified from the frozen ESPN and FIFA snapshots. Injective proves the commitment and revision order, not the source fact by itself."
   },
   "calls": [
     {
       "tool": "list_matches",
-      "input": { "mode": "delayed" },
-      "durationMs": 9,
+      "input": {
+        "mode": "delayed"
+      },
+      "durationMs": 14,
       "success": true,
       "result": {
+        "schema": "proofline.match-catalog.v1",
         "mode": "catalog",
-        "matchId": "WC-2026-M97-FRA-MAR",
-        "dataMode": "delayed",
-        "liveProviderActive": false
+        "availableModes": [
+          "delayed",
+          "scheduled",
+          "historical-replay"
+        ],
+        "liveProviderActive": false,
+        "disclosure": "No live provider is active. Every match carries a machine-readable dataMode and source snapshot.",
+        "matches": [
+          {
+            "id": "WC-2026-M97-FRA-MAR",
+            "competition": "FIFA World Cup 2026",
+            "season": 2026,
+            "label": "France vs Morocco",
+            "homeTeam": "France",
+            "awayTeam": "Morocco",
+            "venue": "Boston Stadium (Gillette Stadium)",
+            "status": "finished",
+            "score": {
+              "home": 2,
+              "away": 0
+            },
+            "scheduledDate": "2026-07-09",
+            "scheduledAt": "2026-07-09T20:00:00.000Z",
+            "dataMode": "delayed",
+            "captureMethod": "delayed-snapshot",
+            "capturedAt": "2026-07-11T10:38:05.000Z",
+            "supersededBy": null,
+            "disclosure": "Delayed snapshot · captured after full time · not a live feed",
+            "ageSeconds": 9466,
+            "freshnessStatus": "stale",
+            "isFresh": false,
+            "isCurrent": false,
+            "source": {
+              "provider": "proofline-multi-source-snapshot",
+              "label": "ESPN public scoreboard + FIFA official results",
+              "url": "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260709",
+              "retrievedAt": "2026-07-11T10:38:05.000Z",
+              "sourceSnapshotHash": "0x6d3023187020be3ab573c6511a463d9fc8e7074d9176cbbf2f7aabdcb2495a3e",
+              "rawPayloadHash": "0x6d3023187020be3ab573c6511a463d9fc8e7074d9176cbbf2f7aabdcb2495a3e",
+              "adapterVersion": "proofline-delayed-snapshot@1.0.0"
+            }
+          }
+        ]
       }
     },
     {
       "tool": "get_match_events",
-      "input": { "match_id": "WC-2026-M97-FRA-MAR" },
-      "durationMs": 5,
+      "input": {
+        "match_id": "WC-2026-M97-FRA-MAR"
+      },
+      "durationMs": 11,
       "success": true,
       "result": {
+        "mode": "delayed",
         "dataMode": "delayed",
-        "eventId": "final-result",
-        "disclosure": "Delayed snapshot; captured after full time; not a live feed"
+        "disclosure": "Delayed snapshot · captured after full time · not a live feed",
+        "matchId": "WC-2026-M97-FRA-MAR",
+        "events": [
+          {
+            "eventId": "final-result",
+            "observations": [
+              {
+                "id": "obs-2026-m97-result-espn",
+                "eventId": "final-result",
+                "source": {
+                  "id": "espn-scoreboard",
+                  "label": "ESPN public scoreboard JSON",
+                  "url": "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260709",
+                  "tier": "licensed",
+                  "reliabilityBps": 9200,
+                  "independenceGroup": "espn"
+                },
+                "receivedAt": "2026-07-11T10:38:05.000Z",
+                "payload": {
+                  "matchId": "WC-2026-M97-FRA-MAR",
+                  "eventType": "match_end",
+                  "minute": 90,
+                  "period": "full-time",
+                  "score": {
+                    "home": 2,
+                    "away": 0
+                  },
+                  "occurredAt": "2026-07-09T22:00:00.000Z"
+                },
+                "provenance": {
+                  "provider": "espn-scoreboard",
+                  "dataMode": "delayed",
+                  "captureMethod": "delayed-snapshot",
+                  "sourceSnapshotHash": "0xe723b02c4ccce750e1f3044a3df7618972f9595096271133c53646bc98c211ec",
+                  "rawPayloadHash": "0xe723b02c4ccce750e1f3044a3df7618972f9595096271133c53646bc98c211ec",
+                  "receivedAt": "2026-07-11T10:38:05.000Z",
+                  "eventOccurredAt": "2026-07-09T22:00:00.000Z",
+                  "eventOccurredAtBasis": "estimated",
+                  "adapterVersion": "snapshot:espn-scoreboard@1.0.0",
+                  "policyConfigHash": "0x735a2ff9f0f2a400c32180ce924d029c204242c34849dfc60bec7a51046f3015",
+                  "verifierVersionHash": "0x995995f752e2587515a9bf36a6d14e380f3fe34e69d515e8c824478eccbbbbbf",
+                  "sourceSnapshotAvailable": true,
+                  "rawPayloadAvailable": true
+                }
+              },
+              {
+                "id": "obs-2026-m97-result-fifa",
+                "eventId": "final-result",
+                "source": {
+                  "id": "fifa-world-cup-match-schedule",
+                  "label": "FIFA official fixtures and results",
+                  "url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/match-schedule-fixtures-results-teams-stadiums",
+                  "tier": "official",
+                  "reliabilityBps": 9800,
+                  "independenceGroup": "fifa"
+                },
+                "receivedAt": "2026-07-11T10:38:05.000Z",
+                "payload": {
+                  "matchId": "WC-2026-M97-FRA-MAR",
+                  "eventType": "match_end",
+                  "minute": 90,
+                  "period": "full-time",
+                  "score": {
+                    "home": 2,
+                    "away": 0
+                  },
+                  "occurredAt": "2026-07-09T22:00:00.000Z"
+                },
+                "provenance": {
+                  "provider": "fifa-world-cup-match-schedule",
+                  "dataMode": "delayed",
+                  "captureMethod": "delayed-snapshot",
+                  "sourceSnapshotHash": "0xbc17e20687ee0bd6d4ea639513377b105022cf9cb34038c23bf569e5047fae3f",
+                  "rawPayloadHash": "0xbc17e20687ee0bd6d4ea639513377b105022cf9cb34038c23bf569e5047fae3f",
+                  "receivedAt": "2026-07-11T10:38:05.000Z",
+                  "eventOccurredAt": "2026-07-09T22:00:00.000Z",
+                  "eventOccurredAtBasis": "estimated",
+                  "adapterVersion": "snapshot:fifa-world-cup-match-schedule@1.0.0",
+                  "policyConfigHash": "0x735a2ff9f0f2a400c32180ce924d029c204242c34849dfc60bec7a51046f3015",
+                  "verifierVersionHash": "0x995995f752e2587515a9bf36a6d14e380f3fe34e69d515e8c824478eccbbbbbf",
+                  "sourceSnapshotAvailable": true,
+                  "rawPayloadAvailable": true
+                }
+              }
+            ],
+            "verification": {
+              "eventId": "final-result",
+              "canonical": {
+                "matchId": "WC-2026-M97-FRA-MAR",
+                "eventType": "match_end",
+                "minute": 90,
+                "period": "full-time",
+                "score": {
+                  "home": 2,
+                  "away": 0
+                },
+                "occurredAt": "2026-07-09T22:00:00.000Z",
+                "canonicalJson": "{\"schema\":\"proofline.event.v1\",\"matchId\":\"wc-2026-m97-fra-mar\",\"eventType\":\"match_end\",\"minute\":90,\"stoppage\":null,\"period\":\"full-time\",\"team\":null,\"player\":null,\"relatedPlayer\":null,\"card\":null,\"score\":{\"home\":2,\"away\":0,\"homePenalties\":null,\"awayPenalties\":null},\"occurredAt\":\"2026-07-09T22:00:00.000Z\"}",
+                "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30"
+              },
+              "state": "verified",
+              "confidenceBps": 9825,
+              "evidenceScore": 98.25,
+              "confidenceLabel": "98.3/100",
+              "thresholdBps": 8200,
+              "thresholdScore": 82,
+              "agreeingObservationIds": [
+                "obs-2026-m97-result-espn",
+                "obs-2026-m97-result-fifa"
+              ],
+              "agreeingSourceGroups": [
+                "espn",
+                "fifa"
+              ],
+              "activeObservationCount": 2,
+              "activeSourceGroupCount": 2,
+              "conflicts": [],
+              "breakdown": {
+                "reliabilityBps": 9500,
+                "quorumBps": 10000,
+                "agreementBps": 10000,
+                "freshnessBps": 10000,
+                "conflictPenaltyBps": 0
+              },
+              "reasons": [
+                "Independent sources agree and the confidence threshold is satisfied."
+              ],
+              "verifiedAt": "2026-07-11T10:38:05.000Z"
+            },
+            "anchor": {
+              "receipt": {
+                "mode": "injective-testnet",
+                "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30",
+                "evidenceRoot": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3",
+                "confidenceBps": 9825,
+                "anchoredAt": "2026-07-11T12:50:04.000Z",
+                "confirmed": true,
+                "contractAddress": "0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1",
+                "txHash": "0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+                "blockNumber": "133197482",
+                "explorerUrl": "https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+                "receiptIndexing": "explorer-api-and-rpc-state"
+              },
+              "simulated": false,
+              "disclosure": "Injective EVM testnet commitment already existed as the match-wide latest revision; its original canonical transaction was recovered from the official Explorer API."
+            },
+            "decision": {
+              "allowed": true,
+              "state": "open",
+              "reasons": [
+                "Result is final, verified, and anchored."
+              ]
+            }
+          }
+        ]
       }
     },
     {
       "tool": "verify_event",
       "input": {
-        "match_id": "WC-2022-WAL-IRN",
+        "match_id": "WC-2026-M97-FRA-MAR",
         "event_id": "final-result"
       },
-      "durationMs": 5,
+      "durationMs": 11,
       "success": true,
       "result": {
-        "dataMode": "historical-replay",
-        "state": "verified"
+        "mode": "delayed",
+        "dataMode": "delayed",
+        "disclosure": "Delayed snapshot · captured after full time · not a live feed",
+        "matchId": "WC-2026-M97-FRA-MAR",
+        "eventId": "final-result",
+        "observations": [
+          {
+            "id": "obs-2026-m97-result-espn",
+            "eventId": "final-result",
+            "source": {
+              "id": "espn-scoreboard",
+              "label": "ESPN public scoreboard JSON",
+              "url": "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260709",
+              "tier": "licensed",
+              "reliabilityBps": 9200,
+              "independenceGroup": "espn"
+            },
+            "receivedAt": "2026-07-11T10:38:05.000Z",
+            "payload": {
+              "matchId": "WC-2026-M97-FRA-MAR",
+              "eventType": "match_end",
+              "minute": 90,
+              "period": "full-time",
+              "score": {
+                "home": 2,
+                "away": 0
+              },
+              "occurredAt": "2026-07-09T22:00:00.000Z"
+            },
+            "provenance": {
+              "provider": "espn-scoreboard",
+              "dataMode": "delayed",
+              "captureMethod": "delayed-snapshot",
+              "sourceSnapshotHash": "0xe723b02c4ccce750e1f3044a3df7618972f9595096271133c53646bc98c211ec",
+              "rawPayloadHash": "0xe723b02c4ccce750e1f3044a3df7618972f9595096271133c53646bc98c211ec",
+              "receivedAt": "2026-07-11T10:38:05.000Z",
+              "eventOccurredAt": "2026-07-09T22:00:00.000Z",
+              "eventOccurredAtBasis": "estimated",
+              "adapterVersion": "snapshot:espn-scoreboard@1.0.0",
+              "policyConfigHash": "0x735a2ff9f0f2a400c32180ce924d029c204242c34849dfc60bec7a51046f3015",
+              "verifierVersionHash": "0x995995f752e2587515a9bf36a6d14e380f3fe34e69d515e8c824478eccbbbbbf",
+              "sourceSnapshotAvailable": true,
+              "rawPayloadAvailable": true
+            }
+          },
+          {
+            "id": "obs-2026-m97-result-fifa",
+            "eventId": "final-result",
+            "source": {
+              "id": "fifa-world-cup-match-schedule",
+              "label": "FIFA official fixtures and results",
+              "url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/match-schedule-fixtures-results-teams-stadiums",
+              "tier": "official",
+              "reliabilityBps": 9800,
+              "independenceGroup": "fifa"
+            },
+            "receivedAt": "2026-07-11T10:38:05.000Z",
+            "payload": {
+              "matchId": "WC-2026-M97-FRA-MAR",
+              "eventType": "match_end",
+              "minute": 90,
+              "period": "full-time",
+              "score": {
+                "home": 2,
+                "away": 0
+              },
+              "occurredAt": "2026-07-09T22:00:00.000Z"
+            },
+            "provenance": {
+              "provider": "fifa-world-cup-match-schedule",
+              "dataMode": "delayed",
+              "captureMethod": "delayed-snapshot",
+              "sourceSnapshotHash": "0xbc17e20687ee0bd6d4ea639513377b105022cf9cb34038c23bf569e5047fae3f",
+              "rawPayloadHash": "0xbc17e20687ee0bd6d4ea639513377b105022cf9cb34038c23bf569e5047fae3f",
+              "receivedAt": "2026-07-11T10:38:05.000Z",
+              "eventOccurredAt": "2026-07-09T22:00:00.000Z",
+              "eventOccurredAtBasis": "estimated",
+              "adapterVersion": "snapshot:fifa-world-cup-match-schedule@1.0.0",
+              "policyConfigHash": "0x735a2ff9f0f2a400c32180ce924d029c204242c34849dfc60bec7a51046f3015",
+              "verifierVersionHash": "0x995995f752e2587515a9bf36a6d14e380f3fe34e69d515e8c824478eccbbbbbf",
+              "sourceSnapshotAvailable": true,
+              "rawPayloadAvailable": true
+            }
+          }
+        ],
+        "verification": {
+          "eventId": "final-result",
+          "canonical": {
+            "matchId": "WC-2026-M97-FRA-MAR",
+            "eventType": "match_end",
+            "minute": 90,
+            "period": "full-time",
+            "score": {
+              "home": 2,
+              "away": 0
+            },
+            "occurredAt": "2026-07-09T22:00:00.000Z",
+            "canonicalJson": "{\"schema\":\"proofline.event.v1\",\"matchId\":\"wc-2026-m97-fra-mar\",\"eventType\":\"match_end\",\"minute\":90,\"stoppage\":null,\"period\":\"full-time\",\"team\":null,\"player\":null,\"relatedPlayer\":null,\"card\":null,\"score\":{\"home\":2,\"away\":0,\"homePenalties\":null,\"awayPenalties\":null},\"occurredAt\":\"2026-07-09T22:00:00.000Z\"}",
+            "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30"
+          },
+          "state": "verified",
+          "confidenceBps": 9825,
+          "evidenceScore": 98.25,
+          "confidenceLabel": "98.3/100",
+          "thresholdBps": 8200,
+          "thresholdScore": 82,
+          "agreeingObservationIds": [
+            "obs-2026-m97-result-espn",
+            "obs-2026-m97-result-fifa"
+          ],
+          "agreeingSourceGroups": [
+            "espn",
+            "fifa"
+          ],
+          "activeObservationCount": 2,
+          "activeSourceGroupCount": 2,
+          "conflicts": [],
+          "breakdown": {
+            "reliabilityBps": 9500,
+            "quorumBps": 10000,
+            "agreementBps": 10000,
+            "freshnessBps": 10000,
+            "conflictPenaltyBps": 0
+          },
+          "reasons": [
+            "Independent sources agree and the confidence threshold is satisfied."
+          ],
+          "verifiedAt": "2026-07-11T10:38:05.000Z"
+        },
+        "anchor": {
+          "receipt": {
+            "mode": "injective-testnet",
+            "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30",
+            "evidenceRoot": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3",
+            "confidenceBps": 9825,
+            "anchoredAt": "2026-07-11T12:50:04.000Z",
+            "confirmed": true,
+            "contractAddress": "0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1",
+            "txHash": "0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+            "blockNumber": "133197482",
+            "explorerUrl": "https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+            "receiptIndexing": "explorer-api-and-rpc-state"
+          },
+          "simulated": false,
+          "disclosure": "Injective EVM testnet commitment already existed as the match-wide latest revision; its original canonical transaction was recovered from the official Explorer API."
+        },
+        "decision": {
+          "allowed": true,
+          "state": "open",
+          "reasons": [
+            "Result is final, verified, and anchored."
+          ]
+        }
       }
     },
     {
       "tool": "assess_settlement_readiness",
       "input": {
-        "match_id": "WC-2022-WAL-IRN",
+        "match_id": "WC-2026-M97-FRA-MAR",
         "event_id": "final-result"
       },
-      "durationMs": 3,
+      "durationMs": 5,
       "success": true,
       "result": {
-        "settlementAllowed": true,
-        "evidenceScoreBps": 9649
+        "mode": "delayed",
+        "dataMode": "delayed",
+        "disclosure": "Delayed snapshot · captured after full time · not a live feed",
+        "matchId": "WC-2026-M97-FRA-MAR",
+        "eventId": "final-result",
+        "verification": {
+          "eventId": "final-result",
+          "canonical": {
+            "matchId": "WC-2026-M97-FRA-MAR",
+            "eventType": "match_end",
+            "minute": 90,
+            "period": "full-time",
+            "score": {
+              "home": 2,
+              "away": 0
+            },
+            "occurredAt": "2026-07-09T22:00:00.000Z",
+            "canonicalJson": "{\"schema\":\"proofline.event.v1\",\"matchId\":\"wc-2026-m97-fra-mar\",\"eventType\":\"match_end\",\"minute\":90,\"stoppage\":null,\"period\":\"full-time\",\"team\":null,\"player\":null,\"relatedPlayer\":null,\"card\":null,\"score\":{\"home\":2,\"away\":0,\"homePenalties\":null,\"awayPenalties\":null},\"occurredAt\":\"2026-07-09T22:00:00.000Z\"}",
+            "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30"
+          },
+          "state": "verified",
+          "confidenceBps": 9825,
+          "evidenceScore": 98.25,
+          "confidenceLabel": "98.3/100",
+          "thresholdBps": 8200,
+          "thresholdScore": 82,
+          "agreeingObservationIds": [
+            "obs-2026-m97-result-espn",
+            "obs-2026-m97-result-fifa"
+          ],
+          "agreeingSourceGroups": [
+            "espn",
+            "fifa"
+          ],
+          "activeObservationCount": 2,
+          "activeSourceGroupCount": 2,
+          "conflicts": [],
+          "breakdown": {
+            "reliabilityBps": 9500,
+            "quorumBps": 10000,
+            "agreementBps": 10000,
+            "freshnessBps": 10000,
+            "conflictPenaltyBps": 0
+          },
+          "reasons": [
+            "Independent sources agree and the confidence threshold is satisfied."
+          ],
+          "verifiedAt": "2026-07-11T10:38:05.000Z"
+        },
+        "anchor": null,
+        "decision": {
+          "allowed": true,
+          "state": "open",
+          "reasons": [
+            "Result is final, verified, and anchored."
+          ]
+        }
       }
     },
     {
       "tool": "verify_onchain_anchor",
       "input": {
-        "match_id": "WC-2022-WAL-IRN",
-        "event_hash": "0x088bd2d1850c38ea45bc365549142d1cd240c8c72339a1c5c7d645d0fad6f10f",
-        "evidence_root": "0x696dc277d6766b67d90774b5d8e0c021a7ba114f18c7110e70cba75b8e0d8d3b"
+        "match_id": "WC-2026-M97-FRA-MAR",
+        "event_hash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30",
+        "evidence_root": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3"
       },
-      "durationMs": 3978,
+      "durationMs": 4126,
       "success": true,
       "result": {
         "valid": true,
         "onchainRead": true,
         "network": "eip155:1439",
-        "blockNumber": "133190869",
-        "registryAddress": "0x959538bE97f6Fc3A09C823514acC176681155A7e",
-        "state": "verified",
-        "revision": "1"
+        "chainId": 1439,
+        "blockNumber": "133199463",
+        "registryAddress": "0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1",
+        "matchIdHash": "0xf3993855d415f6ad6761121fbd0083b9f02bd81023e3c95f13897d915936452f",
+        "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30",
+        "expectedEvidenceRoot": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3",
+        "latest": {
+          "state": "verified",
+          "confidenceBps": 9825,
+          "revision": "1",
+          "decisionHash": "0x6a32b8e50aafc79d94c514e75de7edc4a3526a31f09ba938c0f211ead92a9bb5",
+          "evidenceRoot": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3",
+          "evidenceRootMatches": true
+        },
+        "disclosure": "Fresh MatchProofRegistry eth_call. A matching commitment does not independently prove the sporting fact."
       }
     }
   ],
-  "disclosure": "This is a captured execution transcript from the built Proofline MCP stdio server. The final tool performed a fresh Injective EVM eth_call. It contains no private key, payment signature, or audit token."
+  "disclosure": "Captured from the built Proofline MCP stdio server against the real local testnet API. The final tool performed a fresh Registry v3 eth_call. No private key, payment signature, or audit token is included."
 }

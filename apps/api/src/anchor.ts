@@ -210,7 +210,7 @@ const registryAbi = [
 ] as const;
 
 const EXPECTED_REGISTRY_ID = keccak256(
-  stringToHex("proofline.match-proof-registry.v2"),
+  stringToHex("proofline.match-proof-registry.v3"),
 );
 
 export class DemoAnchorService implements AnchorService {
@@ -317,7 +317,7 @@ export class InjectiveAnchorService implements AnchorService {
       throw new Error("No MatchProofRegistry code exists at the configured address.");
     }
     if (registryId !== EXPECTED_REGISTRY_ID) {
-      throw new Error("The configured contract is not a Proofline MatchProofRegistry v2 instance.");
+      throw new Error("The configured contract is not a Proofline MatchProofRegistry v3 instance.");
     }
     if (!isAnchorer) {
       throw new Error("The configured API signer does not have the registry anchorer role.");
@@ -765,7 +765,7 @@ export class InjectiveAnchorService implements AnchorService {
         checked: true,
         valid: false,
         mode: "injective-testnet",
-        reason: "Configured address is not a Proofline MatchProofRegistry v2.",
+        reason: "Configured address is not a Proofline MatchProofRegistry v3.",
       };
     }
     const chainAnchoredAt = new Date(

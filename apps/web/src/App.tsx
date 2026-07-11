@@ -14,6 +14,7 @@ import { api, ApiError } from "./lib/api";
 import { createBrowserPaymentSignature } from "./lib/wallet";
 import type {
   AnchorRecord,
+  CatalogMatchDetail,
   DecisionResponse,
   EventPayload,
   EventRecord,
@@ -27,11 +28,13 @@ import type {
   VerificationResult,
 } from "./types";
 
-type DrawerStatus = "idle" | "quoting" | "quoted" | "paying" | "uncertain" | "paid" | "error";
+type DrawerStatus = "idle" | "quoting" | "quoted" | "paying" | "uncertain" | "recovering" | "paid" | "error";
 
 const TESTNET_EXPLORER = "https://testnet.blockscout.injective.network";
 const CCTP_SOURCE = "Base Sepolia";
 const CCTP_DESTINATION = "Injective EVM testnet";
+const BUILD_COMMIT = (import.meta.env.VITE_BUILD_COMMIT as string | undefined)?.trim() || "local-worktree";
+const RELEASE_ID = (import.meta.env.VITE_RELEASE_ID as string | undefined)?.trim() || `dev-${BUILD_COMMIT.slice(0, 10)}`;
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -176,13 +179,14 @@ function AppHeader({ integrations, mode = "replay", mcpRuntime = null }: {
   return (
     <header className="topbar">
       <a href="#match-sheet" className="wordmark" aria-label="Proofline home">
+        <img src="/favicon.svg" alt="" width="28" height="28" />
         <span>PROOF</span><i /><span>LINE</span>
       </a>
       <div className="mode-lockup" aria-label="Data mode" data-mode={mode}>
         <span className="mode-pulse" />
         <div>
-          <strong>{mode.includes("replay") ? "Historical replay" : mode === "live" ? "Live evidence" : "Delayed evidence"}</strong>
-          <small>{mode.includes("replay") ? "Recorded evidence · not live" : mode === "live" ? "Provider data · live" : "Provider data · delayed"}</small>
+          <strong>{mode.includes("replay") ? "Historical replay" : mode === "live" ? "Live evidence" : mode === "scheduled" ? "Scheduled evidence" : "Delayed evidence"}</strong>
+          <small>{mode.includes("replay") ? "Recorded evidence · not live" : mode === "live" ? "Provider data · live" : mode === "scheduled" ? "Fixture only · no score" : "Provider data · delayed"}</small>
         </div>
       </div>
       <div className="integration-strip" aria-label="Integration modes">
@@ -645,6 +649,9 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
   const [tamperResult, setTamperResult] = useState<"idle" | "running" | "passed" | "failed">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  // A live PAYMENT-SIGNATURE is deliberately ephemeral: it exists only in this
+  // mounted drawer and is replayed for recovery without storage or logging.
+  const paymentSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -666,6 +673,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
     onVerification(null);
     setWalletAccount(null);
     setPaymentNonce(null);
+    paymentSignatureRef.current = null;
     setTamperResult("idle");
     setMessage(null);
   }, [eventId]);
@@ -712,6 +720,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
         setWalletAccount(browserPayment.account);
         setPaymentNonce(browserPayment.nonce);
       }
+      paymentSignatureRef.current = paymentSignature;
       result = await api.submitProofPayment(matchId, eventId, paymentSignature);
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 409) {
@@ -732,6 +741,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
     }
 
     setProof(result);
+    paymentSignatureRef.current = null;
     onProof(result);
     setStatus("paid");
     try {
@@ -764,22 +774,26 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
   };
 
   const recoverPayment = async () => {
-    setMessage("Checking the existing report session without creating or signing another payment.");
+    const existingSignature = paymentSignatureRef.current;
+    if (!existingSignature) {
+      setMessage("The in-memory authorization is no longer available. Check the payer and facilitator before requesting any fresh quote.");
+      return;
+    }
+    setStatus("recovering");
+    setMessage("Replaying the original in-memory PAYMENT-SIGNATURE. No wallet prompt, storage write, or new authorization is created.");
     try {
-      const response = await api.getProofQuote(matchId, eventId);
-      if ("packet" in response) {
-        setProof(response);
-        onProof(response);
-        setStatus("paid");
-        setMessage("The existing paid report was recovered. No second signature was requested.");
-        const checked = await api.verifyProof(response.packet);
-        setVerification(checked);
-        onVerification(checked);
-        return;
-      }
-      setMessage("No paid report is visible yet. Check the payer, facilitator and nonce before deciding whether to start a fresh quote.");
+      const response = await api.submitProofPayment(matchId, eventId, existingSignature);
+      paymentSignatureRef.current = null;
+      setProof(response);
+      onProof(response);
+      setStatus("paid");
+      setMessage("The existing authorization delivered the report. The wallet was not asked to sign again.");
+      const checked = await api.verifyProof(response.packet);
+      setVerification(checked);
+      onVerification(checked);
     } catch (cause) {
-      setMessage(`Recovery check did not resolve the payment. ${cause instanceof Error ? cause.message : ""}`);
+      setStatus("uncertain");
+      setMessage(`The original signature is still held only in memory, but recovery did not resolve the payment. Do not sign again. ${cause instanceof Error ? cause.message : ""}`);
     }
   };
 
@@ -816,7 +830,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
         <div className="payment-flow" aria-label="x402 payment flow">
           <span className={status !== "idle" && status !== "quoting" ? "complete" : "active"}><i>1</i><b>Request</b><small>GET proof</small></span>
           <Icon name="arrow" />
-          <span className={status === "quoted" || status === "paying" || status === "uncertain" || status === "paid" ? "active" : ""}><i>2</i><b>402 quote</b><small>Inspect terms</small></span>
+          <span className={status === "quoted" || status === "paying" || status === "uncertain" || status === "recovering" || status === "paid" ? "active" : ""}><i>2</i><b>402 quote</b><small>Inspect terms</small></span>
           <Icon name="arrow" />
           <span className={status === "paid" ? "complete" : ""}><i>3</i><b>Report</b><small>Verify hash</small></span>
         </div>
@@ -838,17 +852,17 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
           </section>
         )}
 
-        {status === "uncertain" && (
+        {(status === "uncertain" || status === "recovering") && (
           <section className="payment-uncertain" role="alert" data-testid="payment-uncertain">
             <p className="eyebrow">Payment uncertain · do not sign again</p>
             <h3>A wallet signature exists, but report delivery was not confirmed.</h3>
-            <p>Use these recovery checks before authorizing any new payment.</p>
+            <p>The original <code>PAYMENT-SIGNATURE</code> remains in memory only. Recovery replays that exact header; it is never written to localStorage, rendered, or logged.</p>
             <dl>
               <div><dt>Payer</dt><dd><a href={`${integrations?.injective.explorerUrl ?? TESTNET_EXPLORER}/address/${walletAccount ?? ""}`} target="_blank" rel="noreferrer">{truncate(walletAccount ?? undefined, 9, 7)} <Icon name="external" size={12} /></a></dd></div>
               <div><dt>Facilitator / payee</dt><dd><a href={`${integrations?.injective.explorerUrl ?? TESTNET_EXPLORER}/address/${integrations?.x402.payTo ?? ""}`} target="_blank" rel="noreferrer">{truncate(integrations?.x402.payTo ?? undefined, 9, 7)} <Icon name="external" size={12} /></a></dd></div>
               <div><dt>Authorization nonce</dt><dd><code>{truncate(paymentNonce ?? undefined, 12, 10)}</code></dd></div>
             </dl>
-            <button type="button" className="amber-button" onClick={() => void recoverPayment()}>Check existing report status <Icon name="arrow" /></button>
+            <button type="button" className="amber-button" onClick={() => void recoverPayment()} disabled={status === "recovering"} data-testid="recover-existing-payment">{status === "recovering" ? "Replaying existing signature…" : "Replay existing signature"} <Icon name="arrow" /></button>
           </section>
         )}
 
@@ -860,6 +874,9 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
               <div><dt>Packet hash</dt><dd><code>{truncate(proof.packet.packetHash, 12, 10)}</code></dd></div>
               {proof.packet.evidenceRoot && <div><dt>Evidence root</dt><dd><code>{truncate(proof.packet.evidenceRoot, 12, 10)}</code></dd></div>}
               {proof.packet.issuerAddress && <div><dt>Issuer</dt><dd><code>{truncate(proof.packet.issuerAddress, 9, 7)}</code></dd></div>}
+              {proof.packet.issuerKeyId && <div><dt>Issuer key ID</dt><dd><code>{truncate(proof.packet.issuerKeyId, 12, 10)}</code></dd></div>}
+              {proof.packet.issuerPolicyVersion && <div><dt>Issuer policy</dt><dd><code>{proof.packet.issuerPolicyVersion}</code></dd></div>}
+              {proof.packet.issuedAt && <div><dt>Issued at</dt><dd>{new Date(proof.packet.issuedAt).toISOString()}</dd></div>}
               <div><dt>Evidence score</dt><dd>{evidenceScore(proof.packet.verification.confidenceBps)}</dd></div>
               <div><dt>Settlement</dt><dd>{proof.packet.settlement.allowed ? "Allowed" : "Held"}</dd></div>
               {walletAccount && <div><dt>Payer</dt><dd><code>{truncate(walletAccount, 9, 7)}</code></dd></div>}
@@ -905,15 +922,47 @@ export function App() {
   } = useReplay();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [catalogDetail, setCatalogDetail] = useState<CatalogMatchDetail | null>(null);
+  const [catalogDetailLoading, setCatalogDetailLoading] = useState(false);
+  const [catalogDetailError, setCatalogDetailError] = useState<string | null>(null);
   const [decisionResponse, setDecisionResponse] = useState<DecisionResponse | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [proof, setProof] = useState<ProofPacketResponse | null>(null);
   const [proofVerification, setProofVerification] = useState<ProofVerificationResponse | null>(null);
   const previousReplayCursor = useRef(-1);
 
+  const defaultCatalogMatchId = catalog?.matches.find((entry) => entry.dataMode === "delayed")?.id
+    ?? catalog?.matches[0]?.id
+    ?? snapshot?.match.id
+    ?? null;
+  const activeMatchId = selectedMatchId ?? defaultCatalogMatchId;
+  const selectedCatalogMatch = useMemo(
+    () => catalog?.matches.find((entry) => entry.id === activeMatchId),
+    [activeMatchId, catalog],
+  );
+
+  useEffect(() => {
+    if (!selectedCatalogMatch || selectedCatalogMatch.dataMode === "historical-replay") {
+      setCatalogDetail(null);
+      setCatalogDetailError(null);
+      setCatalogDetailLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setCatalogDetail(null);
+    setCatalogDetailError(null);
+    setCatalogDetailLoading(true);
+    void api.getCatalogMatch(selectedCatalogMatch.id)
+      .then((result) => { if (!cancelled) setCatalogDetail(result); })
+      .catch((cause: unknown) => {
+        if (!cancelled) setCatalogDetailError(cause instanceof Error ? cause.message : "Source detail did not load.");
+      })
+      .finally(() => { if (!cancelled) setCatalogDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedCatalogMatch]);
+
   useEffect(() => {
     if (!snapshot) return;
-    setSelectedMatchId((current) => current ?? snapshot.match.id);
     const cursorChanged = previousReplayCursor.current !== snapshot.replay.cursor;
     previousReplayCursor.current = snapshot.replay.cursor;
     if (!snapshot.events.length) {
@@ -966,11 +1015,10 @@ export function App() {
   const onchainVerified =
     proofVerification?.onchain.checked === true && proofVerification.onchain.valid === true;
   const conflictActive = Boolean(selected?.verification?.conflicts.length);
-  const selectedCatalogMatch = catalog?.matches.find(
-    (entry) => entry.id === (selectedMatchId ?? snapshot.match.id),
-  );
   const showReplay = !selectedCatalogMatch || selectedCatalogMatch.dataMode === "historical-replay";
   const activeDataMode = selectedCatalogMatch?.dataMode ?? snapshot.mode;
+  const proofMatchId = showReplay ? snapshot.match.id : selectedCatalogMatch.id;
+  const proofEventId = showReplay ? selected?.eventId ?? "final-result" : "final-result";
 
   return (
     <div className="app-shell">
@@ -978,12 +1026,13 @@ export function App() {
       <div className="replay-disclosure" role="status">
         <strong>{activeDataMode === "historical-replay" ? "Historical replay · not live" : activeDataMode === "delayed" ? "Delayed snapshot · not live" : "Official schedule · no score"}</strong>
         <span>{selectedCatalogMatch?.disclosure ?? snapshot.disclosure ?? snapshot.match.replayDisclosure}</span>
-        <small>{showReplay ? "All source timestamps and synthetic fault injection are disclosed." : "Provider, retrieval time, raw payload hash, and adapter version are disclosed."}</small>
+        <small>{showReplay ? "All source timestamps and synthetic fault injection are disclosed." : "Provider, retrieval time, source snapshot hash, and adapter version are disclosed."}</small>
       </div>
 
       <MatchCatalogBar
         catalog={catalog}
-        selectedId={selectedMatchId ?? snapshot.match.id}
+        selectedId={activeMatchId ?? snapshot.match.id}
+        detail={catalogDetail}
         onSelect={setSelectedMatchId}
       />
 
@@ -1069,11 +1118,15 @@ export function App() {
             <FundingReadiness integrations={integrations} />
           </details>
         </section>
-      </main></> : selectedCatalogMatch ? <CatalogMatchView match={selectedCatalogMatch} onOpenReplay={() => setSelectedMatchId(snapshot.match.id)} /> : null}
+      </main></> : selectedCatalogMatch ? <CatalogMatchView match={selectedCatalogMatch} detail={catalogDetail} loading={catalogDetailLoading} detailError={catalogDetailError} onVerifyAnchor={() => api.verifyMatchAnchor(selectedCatalogMatch.id)} onOpenProof={() => setDrawerOpen(true)} onOpenReplay={() => setSelectedMatchId(snapshot.match.id)} /> : null}
 
       <footer className="site-footer">
         <span>PROOFLINE / VARA ENGINE</span>
         <p>Display reported events. Settle only verified evidence.</p>
+        <div className="build-stamp" aria-label={`Build commit ${BUILD_COMMIT}; release ${RELEASE_ID}`}>
+          <code>commit {BUILD_COMMIT.slice(0, 12)}</code>
+          <code>release {RELEASE_ID}</code>
+        </div>
         <a href={integrations?.injective.explorerUrl ?? TESTNET_EXPLORER} target="_blank" rel="noreferrer">Injective testnet <Icon name="external" size={13} /></a>
       </footer>
 
@@ -1083,8 +1136,8 @@ export function App() {
 
       <ProofDrawer
         open={drawerOpen}
-        matchId={snapshot.match.id}
-        eventId={selected?.eventId ?? "final-result"}
+        matchId={proofMatchId}
+        eventId={proofEventId}
         integrations={integrations}
         onClose={() => setDrawerOpen(false)}
         onProof={setProof}

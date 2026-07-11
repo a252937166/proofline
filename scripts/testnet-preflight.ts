@@ -59,7 +59,7 @@ const registryAbi = [
   },
   {
     type: "function",
-    name: "anchorProof",
+    name: "appendRevision",
     stateMutability: "nonpayable",
     inputs: [
       { name: "matchIdHash", type: "bytes32" },
@@ -67,6 +67,8 @@ const registryAbi = [
       { name: "evidenceRoot", type: "bytes32" },
       { name: "confidenceBps", type: "uint16" },
       { name: "observedAt", type: "uint64" },
+      { name: "state", type: "uint8" },
+      { name: "expectedPreviousDecisionHash", type: "bytes32" },
     ],
     outputs: [
       { name: "revision", type: "uint64" },
@@ -193,7 +195,7 @@ if (actualChainId !== INJECTIVE_TESTNET_CHAIN_ID) {
 let registryCode: Hex | undefined;
 let registryIdentity: Hex | undefined;
 let hasAnchorerRole = false;
-let registryV2AbiMatched = false;
+let registryV3AbiMatched = false;
 let registryProbeEvidenceRoot: Hex | undefined;
 let registryReadError: string | undefined;
 if (registry) {
@@ -201,10 +203,10 @@ if (registry) {
   if (registryCode && registryCode !== "0x") {
     try {
       const probeMatchIdHash = keccak256(
-        stringToHex("PROOFLINE:REGISTRY-V2:PREFLIGHT"),
+        stringToHex("PROOFLINE:REGISTRY-V3:PREFLIGHT"),
       );
       const probeEventHash = keccak256(
-        stringToHex("PROOFLINE:REGISTRY-V2:PROBE-EVENT"),
+        stringToHex("PROOFLINE:REGISTRY-V3:PROBE-EVENT"),
       );
       const [identity, anchorerRole, settlementProbe] = await Promise.all([
         client.readContract({
@@ -228,10 +230,10 @@ if (registry) {
       registryIdentity = identity;
       hasAnchorerRole = anchorerRole;
       // A successful six-field decode, including the evidenceRoot bytes32,
-      // proves the deployed view surface is Registry v2. The probe is an
+      // proves the deployed view surface is Registry v3. The probe is an
       // eth_call only and cannot create a revision.
       registryProbeEvidenceRoot = settlementProbe[5];
-      registryV2AbiMatched = /^0x[0-9a-fA-F]{64}$/.test(
+      registryV3AbiMatched = /^0x[0-9a-fA-F]{64}$/.test(
         registryProbeEvidenceRoot,
       );
     } catch (error) {
@@ -258,7 +260,7 @@ const registryReady =
   Boolean(registry) &&
   registryCodePresent &&
   registryIdentityMatched &&
-  registryV2AbiMatched &&
+  registryV3AbiMatched &&
   hasAnchorerRole;
 
 const deployReady = deployerGas > 0n;
@@ -268,7 +270,7 @@ const warnings = [
   ...(registry
     ? registryReady
       ? []
-      : ["The configured registry code, v2 identity/ABI, or anchorer role is not ready."]
+      : ["The configured registry code, v3 identity/ABI, or anchorer role is not ready."]
     : ["No registry is configured; deploy:contract has not completed and persisted its address."]),
   ...(deployReady
     ? []
@@ -315,8 +317,9 @@ process.stdout.write(
         codePresent: registryCodePresent,
         expectedRegistryId: PROOFLINE_REGISTRY_ID,
         identityMatched: registryIdentityMatched,
-        v2AbiMatched: registryV2AbiMatched,
-        anchorProofArgumentCount: 5,
+        v3AbiMatched: registryV3AbiMatched,
+        settlementWrite: "appendRevision",
+        appendRevisionArgumentCount: 7,
         latestSettlementProbeEvidenceRoot:
           registryProbeEvidenceRoot ?? null,
         readError: registryReadError ?? null,

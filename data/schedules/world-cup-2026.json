@@ -21,8 +21,11 @@
       "scheduledDate": "2026-07-11",
       "scheduledAt": "2026-07-11T21:00:00.000Z",
       "dataMode": "scheduled",
+      "captureMethod": "schedule-snapshot",
+      "capturedAt": "2026-07-11T10:38:05.000Z",
+      "supersededBy": null,
       "disclosure": "Official schedule snapshot · 17:00 ET · no live status or score is claimed",
-      "rawPayload": {
+      "sourceSnapshot": {
         "section": "FIFA World Cup 2026 quarter-final fixtures and results",
         "date": "Saturday, 11 July 2026",
         "fixture": "Match 99 – Norway v England - 17:00 - Miami Stadium",
@@ -42,8 +45,11 @@
       "scheduledDate": "2026-07-11",
       "scheduledAt": "2026-07-12T01:00:00.000Z",
       "dataMode": "scheduled",
+      "captureMethod": "schedule-snapshot",
+      "capturedAt": "2026-07-11T10:38:05.000Z",
+      "supersededBy": null,
       "disclosure": "Official schedule snapshot · 21:00 ET · no live status or score is claimed",
-      "rawPayload": {
+      "sourceSnapshot": {
         "section": "FIFA World Cup 2026 quarter-final fixtures and results",
         "date": "Saturday, 11 July 2026",
         "fixture": "Match 100 – Argentina v Switzerland - 21:00 - Kansas City Stadium",

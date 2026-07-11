@@ -149,12 +149,14 @@ describe("MatchProofRegistry EVM behavior", () => {
     const correctedEvent = hash("event:2-2");
     const oldEvidence = hash("evidence:old");
 
-    await write(accounts[0], "anchorProof", [
+    await write(accounts[0], "appendRevision", [
       matchIdHash,
       oldEvent,
       oldEvidence,
       9_650,
       await now(),
+      State.Verified,
+      zeroHash,
     ]);
     const first = (await read("getLatest", [matchIdHash])) as {
       decisionHash: Hex;
@@ -218,7 +220,7 @@ describe("MatchProofRegistry EVM behavior", () => {
     }
   });
 
-  it("rejects every state rollback after Final while permitting a later Final revision", async () => {
+  it("makes Final fully immutable, including a later Final revision", async () => {
     const matchIdHash = hash("match:final");
     const eventHash = hash("event:final");
     await append(matchIdHash, eventHash, State.Verified, zeroHash);
@@ -231,6 +233,7 @@ describe("MatchProofRegistry EVM behavior", () => {
       State.Verified,
       State.Disputed,
       State.Rejected,
+      State.Final,
     ]) {
       await expectRevert(
         () => append(matchIdHash, eventHash, rollback, finalDecision.decisionHash),
@@ -239,8 +242,7 @@ describe("MatchProofRegistry EVM behavior", () => {
     }
     expect(await read("getRevisionCount", [matchIdHash])).toBe(2n);
 
-    await append(matchIdHash, eventHash, State.Final, finalDecision.decisionHash);
-    expect(await read("getRevisionCount", [matchIdHash])).toBe(3n);
+    expect(await read("getRevisionCount", [matchIdHash])).toBe(2n);
   });
 
   it("enforces optimistic concurrency and leaves revision order unchanged on stale writes", async () => {
@@ -308,34 +310,40 @@ describe("MatchProofRegistry EVM behavior", () => {
 
     await expectRevert(
       () =>
-        write(accounts[0], "anchorProof", [
+        write(accounts[0], "appendRevision", [
           matchIdHash,
           eventHash,
           zeroHash,
           9_000,
           observedAt,
+          State.Verified,
+          zeroHash,
         ]),
       "evidenceRoot must be present",
     );
     await expectRevert(
       () =>
-        write(accounts[0], "anchorProof", [
+        write(accounts[0], "appendRevision", [
           matchIdHash,
           eventHash,
           hash("evidence"),
           8_199,
           observedAt,
+          State.Verified,
+          zeroHash,
         ]),
       "Verified confidence must reach the policy threshold",
     );
     await expectRevert(
       () =>
-        write(accounts[0], "anchorProof", [
+        write(accounts[0], "appendRevision", [
           matchIdHash,
           eventHash,
           hash("evidence"),
           9_000,
           observedAt + 3_600n,
+          State.Verified,
+          zeroHash,
         ]),
       "observations more than five minutes ahead must fail",
     );

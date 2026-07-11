@@ -15,6 +15,13 @@ export type VerificationState = "observed" | "insufficient" | "contested" | "ver
 export type AnchorMode = "none" | "demo" | "injective-testnet";
 
 export type DataMode = "live" | "delayed" | "scheduled" | "historical-replay";
+export type CaptureMethod =
+  | "live-provider"
+  | "delayed-snapshot"
+  | "schedule-snapshot"
+  | "historical-replay";
+
+export type FreshnessStatus = "fresh" | "stale" | "archived" | "superseded";
 
 export interface MatchScore {
   home: number;
@@ -60,14 +67,21 @@ export interface EventObservation {
 
 export interface ObservationProvenance {
   provider: string;
-  rawPayloadHash: `0x${string}`;
+  dataMode?: DataMode;
+  captureMethod?: CaptureMethod;
+  /** Hash of the exact normalized provider snapshot/excerpt retained by Proofline. */
+  sourceSnapshotHash: `0x${string}`;
+  /** @deprecated v1 compatibility alias. Use sourceSnapshotHash. */
+  rawPayloadHash?: `0x${string}`;
   receivedAt: string;
   eventOccurredAt: string;
   eventOccurredAtBasis?: "provider" | "estimated" | "replay-clock";
   adapterVersion: string;
   policyConfigHash: `0x${string}`;
   verifierVersionHash: `0x${string}`;
-  rawPayloadAvailable: boolean;
+  sourceSnapshotAvailable: boolean;
+  /** @deprecated v1 compatibility alias. Use sourceSnapshotAvailable. */
+  rawPayloadAvailable?: boolean;
 }
 
 export interface CanonicalEvent extends EventPayload {
@@ -186,6 +200,27 @@ export interface ReplayDataset {
   frames: ReplayFrame[];
 }
 
+export interface SnapshotProofMatch {
+  id: string;
+  competition: string;
+  season: number;
+  label: string;
+  homeTeam: string;
+  awayTeam: string;
+  venue: string;
+  startedAt: string;
+  status: MatchStatus;
+  score: MatchScore;
+  dataMode: "delayed" | "live";
+  captureMethod: "delayed-snapshot" | "live-provider";
+  disclosure: string;
+  sourceNotice: string;
+  capturedAt: string;
+  supersededBy: string | null;
+}
+
+export type ProofPacketMatch = ReplayMatch | SnapshotProofMatch;
+
 export interface MatchCatalogEntry {
   id: string;
   competition: string;
@@ -199,13 +234,23 @@ export interface MatchCatalogEntry {
   scheduledDate: string;
   scheduledAt: string | null;
   dataMode: DataMode;
+  captureMethod: CaptureMethod;
   disclosure: string;
+  capturedAt: string;
+  ageSeconds: number;
+  freshnessStatus: FreshnessStatus;
+  isFresh: boolean;
+  /** @deprecated Use isFresh. Retained for proofline.packet.v1 consumers. */
+  isCurrent: boolean;
+  supersededBy: string | null;
   source: {
     provider: string;
     label: string;
     url: string;
     retrievedAt: string;
-    rawPayloadHash: `0x${string}`;
+    sourceSnapshotHash: `0x${string}`;
+    /** @deprecated v1 compatibility alias. */
+    rawPayloadHash?: `0x${string}`;
     adapterVersion: string;
   };
 }
@@ -218,14 +263,24 @@ export interface ProofPacketCore {
     thresholdBps: number;
   };
   generatedAt: string;
-  match: ReplayMatch;
+  match: ProofPacketMatch;
   eventId: string;
   observations: EventObservation[];
   evidenceRoot: `0x${string}`;
   issuerAddress: `0x${string}`;
+  issuerKeyId: `0x${string}`;
+  issuerPolicyVersion: "proofline.issuer-policy.v1";
+  issuedAt: string;
   verification: VerificationResult;
   anchor?: AnchorReceipt;
   settlement: SettlementDecision;
+}
+
+export interface TrustedIssuerHistoryEntry {
+  keyId: `0x${string}`;
+  address: `0x${string}`;
+  validFrom: string;
+  revokedAt?: string;
 }
 
 export interface ProofPacket extends ProofPacketCore {
@@ -257,6 +312,9 @@ export interface PacketVerificationReport {
     trustedIssuer: boolean;
     scheme: "eip712";
     issuerAddress: `0x${string}`;
+    issuerKeyId: `0x${string}`;
+    issuerPolicyVersion: "proofline.issuer-policy.v1";
+    trustSource: "current" | "history" | "untrusted";
     recoveredAddress: `0x${string}` | null;
     detail: string;
   };
