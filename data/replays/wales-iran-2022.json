@@ -1,0 +1,392 @@
+{
+  "match": {
+    "id": "WC-2022-WAL-IRN",
+    "competition": "FIFA World Cup",
+    "season": 2022,
+    "label": "Wales vs IR Iran",
+    "homeTeam": "Wales",
+    "awayTeam": "IR Iran",
+    "venue": "Ahmad bin Ali Stadium",
+    "startedAt": "2022-11-25T10:00:00.000Z",
+    "status": "scheduled",
+    "score": { "home": 0, "away": 0 },
+    "replayDisclosure": "Historical Replay · Wales vs IR Iran · 25 Nov 2022 · Not Live",
+    "sourceNotice": "Normalized factual subset derived from OpenFootball CC0 and the FIFA match review. One injected yellow-card claim is explicitly synthetic and exists only to test conflict quarantine."
+  },
+  "frames": [
+    {
+      "id": "frame-01-kickoff-open",
+      "atMs": 0,
+      "kind": "observe",
+      "label": "OpenFootball reports kickoff",
+      "observation": {
+        "id": "obs-kickoff-open",
+        "eventId": "kickoff",
+        "source": {
+          "id": "openfootball-worldcup-more",
+          "label": "OpenFootball CC0 archive",
+          "url": "https://github.com/openfootball/worldcup.more/blob/092f6b7a97b1b2cea4b2fe2b7706894a8866878b/worldcup/2022_worldcup.txt#L287-L306",
+          "tier": "independent",
+          "reliabilityBps": 8200,
+          "independenceGroup": "openfootball"
+        },
+        "receivedAt": "2026-07-10T12:00:00.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "kickoff",
+          "minute": 0,
+          "period": "first-half",
+          "score": { "home": 0, "away": 0 },
+          "occurredAt": "2022-11-25T10:00:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-02-kickoff-fifa",
+      "atMs": 650,
+      "kind": "observe",
+      "label": "FIFA corroborates match start",
+      "observation": {
+        "id": "obs-kickoff-fifa",
+        "eventId": "kickoff",
+        "source": {
+          "id": "fifa-match-review",
+          "label": "FIFA match review",
+          "url": "https://www.fifa.com/en/articles/wales-ir-iran-review-group-b-fifa-world-cup-qatar-2022",
+          "tier": "official",
+          "reliabilityBps": 9800,
+          "independenceGroup": "fifa"
+        },
+        "receivedAt": "2026-07-10T12:00:01.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "kickoff",
+          "minute": 0,
+          "period": "first-half",
+          "score": { "home": 0, "away": 0 },
+          "occurredAt": "2022-11-25T10:00:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-03-red-open",
+      "atMs": 1300,
+      "kind": "observe",
+      "label": "OpenFootball reports Hennessey red card",
+      "observation": {
+        "id": "obs-red-open",
+        "eventId": "hennessey-red-86",
+        "source": {
+          "id": "openfootball-worldcup-more",
+          "label": "OpenFootball CC0 archive",
+          "url": "https://github.com/openfootball/worldcup.more/blob/092f6b7a97b1b2cea4b2fe2b7706894a8866878b/worldcup/2022_worldcup.txt#L287-L306",
+          "tier": "independent",
+          "reliabilityBps": 8200,
+          "independenceGroup": "openfootball"
+        },
+        "receivedAt": "2026-07-10T12:00:02.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "card",
+          "minute": 86,
+          "period": "second-half",
+          "team": "Wales",
+          "player": "Wayne Hennessey",
+          "card": "red",
+          "score": { "home": 0, "away": 0 },
+          "occurredAt": "2022-11-25T11:41:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-04-red-chaos",
+      "atMs": 1950,
+      "kind": "observe",
+      "label": "Injected provider lag mislabels the card as yellow",
+      "observation": {
+        "id": "obs-red-chaos",
+        "eventId": "hennessey-red-86",
+        "source": {
+          "id": "injected-lag-feed",
+          "label": "Injected chaos feed (synthetic)",
+          "url": "https://proofline.invalid/replay-only/injected-fault",
+          "tier": "community",
+          "reliabilityBps": 5200,
+          "independenceGroup": "injected-chaos"
+        },
+        "receivedAt": "2026-07-10T12:00:03.000Z",
+        "note": "Synthetic fault injection. This is not a historical claim.",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "card",
+          "minute": 86,
+          "period": "second-half",
+          "team": "Wales",
+          "player": "Wayne Hennessey",
+          "card": "yellow",
+          "score": { "home": 0, "away": 0 },
+          "occurredAt": "2022-11-25T11:41:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-05-red-fifa",
+      "atMs": 2600,
+      "kind": "observe",
+      "label": "FIFA corroborates the 86th-minute red card",
+      "observation": {
+        "id": "obs-red-fifa",
+        "eventId": "hennessey-red-86",
+        "source": {
+          "id": "fifa-match-review",
+          "label": "FIFA match review",
+          "url": "https://www.fifa.com/en/articles/wales-ir-iran-review-group-b-fifa-world-cup-qatar-2022",
+          "tier": "official",
+          "reliabilityBps": 9800,
+          "independenceGroup": "fifa"
+        },
+        "receivedAt": "2026-07-10T12:00:04.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "card",
+          "minute": 86,
+          "period": "second-half",
+          "team": "Wales",
+          "player": "Wayne Hennessey",
+          "card": "red",
+          "score": { "home": 0, "away": 0 },
+          "occurredAt": "2022-11-25T11:41:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-06-red-retract",
+      "atMs": 3250,
+      "kind": "retract",
+      "label": "Synthetic lag feed corrects its card classification",
+      "observationId": "obs-red-chaos",
+      "reason": "Replay fault resolved after authoritative VAR review."
+    },
+    {
+      "id": "frame-07-ward-sub",
+      "atMs": 3900,
+      "kind": "observe",
+      "label": "Danny Ward replaces Aaron Ramsey",
+      "observation": {
+        "id": "obs-sub-open",
+        "eventId": "ward-sub-87",
+        "source": {
+          "id": "openfootball-worldcup-more",
+          "label": "OpenFootball CC0 archive",
+          "url": "https://github.com/openfootball/worldcup.more/blob/092f6b7a97b1b2cea4b2fe2b7706894a8866878b/worldcup/2022_worldcup.txt#L287-L306",
+          "tier": "independent",
+          "reliabilityBps": 8200,
+          "independenceGroup": "openfootball"
+        },
+        "receivedAt": "2026-07-10T12:00:06.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "substitution",
+          "minute": 87,
+          "period": "second-half",
+          "team": "Wales",
+          "player": "Danny Ward",
+          "relatedPlayer": "Aaron Ramsey",
+          "score": { "home": 0, "away": 0 },
+          "occurredAt": "2022-11-25T11:42:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-08-goal-one-open",
+      "atMs": 4550,
+      "kind": "observe",
+      "label": "OpenFootball reports Cheshmi 90+8 goal",
+      "observation": {
+        "id": "obs-goal-one-open",
+        "eventId": "cheshmi-goal-90-8",
+        "source": {
+          "id": "openfootball-worldcup-more",
+          "label": "OpenFootball CC0 archive",
+          "url": "https://github.com/openfootball/worldcup.more/blob/092f6b7a97b1b2cea4b2fe2b7706894a8866878b/worldcup/2022_worldcup.txt#L287-L306",
+          "tier": "independent",
+          "reliabilityBps": 8200,
+          "independenceGroup": "openfootball"
+        },
+        "receivedAt": "2026-07-10T12:00:07.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "goal",
+          "minute": 90,
+          "stoppage": 8,
+          "period": "second-half",
+          "team": "IR Iran",
+          "player": "Rouzbeh Cheshmi",
+          "score": { "home": 0, "away": 1 },
+          "occurredAt": "2022-11-25T11:53:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-09-goal-one-fifa",
+      "atMs": 5200,
+      "kind": "observe",
+      "label": "FIFA corroborates Cheshmi at 90+8",
+      "observation": {
+        "id": "obs-goal-one-fifa",
+        "eventId": "cheshmi-goal-90-8",
+        "source": {
+          "id": "fifa-match-review",
+          "label": "FIFA match review",
+          "url": "https://www.fifa.com/en/articles/wales-ir-iran-review-group-b-fifa-world-cup-qatar-2022",
+          "tier": "official",
+          "reliabilityBps": 9800,
+          "independenceGroup": "fifa"
+        },
+        "receivedAt": "2026-07-10T12:00:08.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "goal",
+          "minute": 90,
+          "stoppage": 8,
+          "period": "second-half",
+          "team": "IR Iran",
+          "player": "Rouzbeh Cheshmi",
+          "score": { "home": 0, "away": 1 },
+          "occurredAt": "2022-11-25T11:53:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-10-goal-two-open",
+      "atMs": 5850,
+      "kind": "observe",
+      "label": "OpenFootball reports Rezaeian 90+11 goal",
+      "observation": {
+        "id": "obs-goal-two-open",
+        "eventId": "rezaeian-goal-90-11",
+        "source": {
+          "id": "openfootball-worldcup-more",
+          "label": "OpenFootball CC0 archive",
+          "url": "https://github.com/openfootball/worldcup.more/blob/092f6b7a97b1b2cea4b2fe2b7706894a8866878b/worldcup/2022_worldcup.txt#L287-L306",
+          "tier": "independent",
+          "reliabilityBps": 8200,
+          "independenceGroup": "openfootball"
+        },
+        "receivedAt": "2026-07-10T12:00:09.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "goal",
+          "minute": 90,
+          "stoppage": 11,
+          "period": "second-half",
+          "team": "IR Iran",
+          "player": "Ramin Rezaeian",
+          "score": { "home": 0, "away": 2 },
+          "occurredAt": "2022-11-25T11:56:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-11-goal-two-fifa",
+      "atMs": 6500,
+      "kind": "observe",
+      "label": "FIFA corroborates Rezaeian at 90+11",
+      "observation": {
+        "id": "obs-goal-two-fifa",
+        "eventId": "rezaeian-goal-90-11",
+        "source": {
+          "id": "fifa-match-review",
+          "label": "FIFA match review",
+          "url": "https://www.fifa.com/en/articles/wales-ir-iran-review-group-b-fifa-world-cup-qatar-2022",
+          "tier": "official",
+          "reliabilityBps": 9800,
+          "independenceGroup": "fifa"
+        },
+        "receivedAt": "2026-07-10T12:00:10.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "goal",
+          "minute": 90,
+          "stoppage": 11,
+          "period": "second-half",
+          "team": "IR Iran",
+          "player": "Ramin Rezaeian",
+          "score": { "home": 0, "away": 2 },
+          "occurredAt": "2022-11-25T11:56:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-12-result-open",
+      "atMs": 7150,
+      "kind": "observe",
+      "label": "OpenFootball records the final result",
+      "observation": {
+        "id": "obs-result-open",
+        "eventId": "final-result",
+        "source": {
+          "id": "openfootball-worldcup-more",
+          "label": "OpenFootball CC0 archive",
+          "url": "https://github.com/openfootball/worldcup.more/blob/092f6b7a97b1b2cea4b2fe2b7706894a8866878b/worldcup/2022_worldcup.txt#L287-L306",
+          "tier": "independent",
+          "reliabilityBps": 8200,
+          "independenceGroup": "openfootball"
+        },
+        "receivedAt": "2026-07-10T12:00:11.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "match_end",
+          "minute": 90,
+          "stoppage": 12,
+          "period": "full-time",
+          "score": { "home": 0, "away": 2 },
+          "occurredAt": "2022-11-25T11:57:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-13-result-fifa",
+      "atMs": 7800,
+      "kind": "observe",
+      "label": "FIFA corroborates the 0–2 final result",
+      "observation": {
+        "id": "obs-result-fifa",
+        "eventId": "final-result",
+        "source": {
+          "id": "fifa-match-review",
+          "label": "FIFA match review",
+          "url": "https://www.fifa.com/en/articles/wales-ir-iran-review-group-b-fifa-world-cup-qatar-2022",
+          "tier": "official",
+          "reliabilityBps": 9800,
+          "independenceGroup": "fifa"
+        },
+        "receivedAt": "2026-07-10T12:00:12.000Z",
+        "payload": {
+          "matchId": "WC-2022-WAL-IRN",
+          "eventType": "match_end",
+          "minute": 90,
+          "stoppage": 12,
+          "period": "full-time",
+          "score": { "home": 0, "away": 2 },
+          "occurredAt": "2022-11-25T11:57:00.000Z"
+        }
+      }
+    },
+    {
+      "id": "frame-14-finished",
+      "atMs": 8450,
+      "kind": "match_status",
+      "label": "Match state becomes final",
+      "status": "finished",
+      "score": { "home": 0, "away": 2 }
+    },
+    {
+      "id": "frame-15-anchor",
+      "atMs": 9100,
+      "kind": "anchor",
+      "label": "Anchor the verified final result",
+      "eventId": "final-result"
+    }
+  ]
+}

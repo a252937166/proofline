@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+.env.local
+coverage/
+.DS_Store
+*.log
+contracts/artifacts/
+data/runtime/
+docs/media/
+deployment/out/

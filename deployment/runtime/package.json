@@ -1,0 +1,19 @@
+{
+  "name": "proofline-api-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node apps/api/dist/index.js"
+  },
+  "dependencies": {
+    "@injectivelabs/x402": "0.0.1",
+    "@proofline/core": "file:packages/core",
+    "dotenv": "17.4.2",
+    "express": "5.1.0",
+    "viem": "2.55.0"
+  }
+}

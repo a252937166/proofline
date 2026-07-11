@@ -1,0 +1,112 @@
+import type { AnchorService } from "./anchor.js";
+import {
+  INJECTIVE_TESTNET_NETWORK,
+  INJECTIVE_TESTNET_USDC,
+  X402_PRICE_ATOMIC,
+  X402_PRICE_DISPLAY,
+  type RuntimeConfig,
+} from "./config.js";
+
+function providerStatus(input: {
+  id: string;
+  configured: boolean;
+  environmentVariable: string;
+  providerLabel: string;
+}): Record<string, unknown> {
+  return {
+    id: input.id,
+    configured: input.configured,
+    status: input.configured ? "ready" : "not-configured",
+    environmentVariable: input.environmentVariable,
+    capability: "credential-readiness-only",
+    disclosure: input.configured
+      ? `${input.providerLabel} credentials are present server-side. Replay routes still return attributed saved facts; raw provider payloads are never exposed.`
+      : `${input.providerLabel} is optional and disabled because no server-side token is configured.`,
+  };
+}
+
+export function integrationStatus(
+  config: RuntimeConfig,
+  anchorService: AnchorService,
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, unknown> {
+  const anchor = anchorService.status();
+  const anchorRequestedButIncomplete =
+    ["testnet", "injective-testnet"].includes(
+      (env.INJECTIVE_ANCHOR_MODE ?? env.CHAIN_MODE ?? "").toLowerCase(),
+    ) &&
+    config.anchor.mode === "demo";
+  const x402Live = config.x402.mode === "live";
+  const x402Configured =
+    config.x402.mode === "live" ? config.x402.configured : true;
+
+  return {
+    schema: "proofline.integrations.v1",
+    dataMode: {
+      active: "historical-replay",
+      disclosure:
+        "Historical Replay · Wales vs IR Iran · 25 Nov 2022 · Not Live",
+    },
+    providers: {
+      apiFootball: providerStatus({
+        id: "api-football",
+        configured: Boolean(config.apiFootballToken),
+        environmentVariable: "API_FOOTBALL_KEY (or API_FOOTBALL_TOKEN)",
+        providerLabel: "API-Football",
+      }),
+      footballData: providerStatus({
+        id: "football-data",
+        configured: Boolean(config.footballDataToken),
+        environmentVariable: "FOOTBALL_DATA_TOKEN",
+        providerLabel: "football-data.org",
+      }),
+    },
+    injective: {
+      ...anchor,
+      ...(anchorRequestedButIncomplete
+        ? {
+            status: "misconfigured",
+            disclosure:
+              "Injective testnet anchoring was requested but the private key or registry address is missing/invalid. The API has safely stayed in labelled demo mode.",
+          }
+        : {}),
+    },
+    x402: {
+      mode: x402Live ? "live" : "demo-sandbox",
+      status: x402Live
+        ? x402Configured
+          ? "configured-unverified"
+          : "misconfigured"
+        : "ready",
+      simulated: !x402Live,
+      protocolVersion: 2,
+      network: INJECTIVE_TESTNET_NETWORK,
+      asset: {
+        symbol: "USDC",
+        address: INJECTIVE_TESTNET_USDC,
+        decimals: 6,
+      },
+      priceAtomic: X402_PRICE_ATOMIC,
+      priceDisplay: X402_PRICE_DISPLAY,
+      payTo:
+        config.x402.mode === "live" ? config.x402.payTo ?? null : null,
+      paymentHeader: "PAYMENT-SIGNATURE",
+      disclosure: x402Live
+        ? x402Configured
+          ? "Official @injectivelabs/x402 middleware is configured for real Injective testnet USDC settlement and loads on demand."
+          : "Live x402 was requested, but X402_PAY_TO plus a facilitator key or URL are not valid. Requests fail closed; no demo success is substituted."
+        : "Demo sandbox negotiates HTTP 402 without signing, transferring USDC, or creating a transaction. The response is visibly marked simulated.",
+    },
+    cctp: {
+      status: "plan-only",
+      configured: false,
+      executable: false,
+      source: "Base Sepolia · domain 6",
+      destination: "Injective EVM testnet · domain 29",
+      irisBaseUrl:
+        env.CIRCLE_IRIS_BASE_URL ?? "https://iris-api-sandbox.circle.com",
+      disclosure:
+        "PLAN ONLY · Proofline validates the intended testnet route and requires approval before burn, but this repository does not execute approve, depositForBurn, Iris polling, receiveMessage, mint, or balance recheck.",
+    },
+  };
+}

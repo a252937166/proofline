@@ -1,0 +1,49 @@
+{
+  "name": "proofline",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "predev": "npm run build -w @proofline/core",
+    "dev": "concurrently -n api,web -c yellow,cyan \"npm run dev -w @proofline/api\" \"npm run dev -w @proofline/web\"",
+    "build": "npm run build -w @proofline/core && npm run build -w @proofline/web && npm run build -w @proofline/api && npm run build -w @proofline/mcp",
+    "test": "npm run test -w @proofline/core && npm run test -w @proofline/api && npm run test -w @proofline/mcp && npm run test:contract && npm run test:workflow",
+    "test:contract": "vitest run contracts/test/registry.test.ts",
+    "test:workflow": "vitest run scripts/test/testnet-workflow.test.ts",
+    "typecheck": "npm run typecheck -w @proofline/core && npm run typecheck -w @proofline/api && npm run typecheck -w @proofline/web && npm run typecheck -w @proofline/mcp && npm run typecheck:scripts",
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json --noEmit",
+    "check": "npm run build -w @proofline/core && npm run typecheck && npm run test && npm run build && npm run compile:contract",
+    "compile:contract": "node contracts/scripts/compile.mjs",
+    "predeploy:contract": "npm run compile:contract",
+    "deploy:contract": "tsx contracts/scripts/deploy.ts",
+    "wallets:create:testnet": "tsx scripts/create-testnet-wallets.ts",
+    "balances:testnet": "tsx scripts/check-testnet-balances.ts",
+    "testnet:preflight": "tsx scripts/testnet-preflight.ts",
+    "testnet:api": "tsx scripts/start-testnet-api.ts",
+    "anchor:testnet": "tsx scripts/anchor-testnet-replay.ts",
+    "buy:proof": "tsx scripts/buy-proof.ts",
+    "smoke": "tsx scripts/smoke-demo.ts",
+    "mcp": "npm run start -w @proofline/mcp"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "overrides": {
+    "tmp": "^0.2.6"
+  },
+  "devDependencies": {
+    "@injectivelabs/x402": "0.0.1",
+    "@types/node": "^22.19.3",
+    "concurrently": "^9.2.1",
+    "dotenv": "^17.4.2",
+    "solc": "^0.8.36",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "viem": "^2.55.0",
+    "vitest": "^3.2.4"
+  }
+}
