@@ -61,6 +61,10 @@ if (( EUID != 0 )); then
   printf 'deploy-release.sh must run as root\n' >&2
   exit 1
 fi
+if [[ ! -c /dev/null ]]; then
+  printf '/dev/null is not a character device; refusing to restart services until the host device is repaired\n' >&2
+  exit 1
+fi
 if [[ -z "${API_ARCHIVE}" || -z "${WEB_ARCHIVE}" ]]; then
   usage >&2
   exit 2
@@ -281,13 +285,28 @@ wait_for_health "${LOCAL_HEALTH_URL}" 30
 systemctl restart proofline-mcp.service
 
 wait_for_mcp() {
-  local attempts=${1:-15}
+  local attempts=${1:-75}
   local response
   local attempt
   for ((attempt = 1; attempt <= attempts; attempt += 1)); do
     if response=$(curl --fail --silent --show-error --max-time 3 \
       http://127.0.0.1:4035/api/mcp/runtime 2>/dev/null); then
-      if [[ "${response}" == *'"agentReady":true'* && "${response}" == *'"transport":"stdio"'* ]]; then
+      if printf '%s' "${response}" | node -e '
+        let input = "";
+        process.stdin.on("data", (chunk) => { input += chunk; });
+        process.stdin.on("end", () => {
+          const value = JSON.parse(input);
+          const heartbeatAt = Date.parse(value.heartbeat?.at ?? "");
+          const age = Date.now() - heartbeatAt;
+          if (
+            value.agentReady !== true ||
+            value.heartbeat?.transport !== "stdio" ||
+            !Number.isFinite(age) ||
+            age < 0 ||
+            age > 20_000
+          ) process.exit(1);
+        });
+      '; then
         return 0
       fi
     fi
@@ -296,7 +315,7 @@ wait_for_mcp() {
   return 1
 }
 
-wait_for_mcp 15
+wait_for_mcp 75
 nginx -t
 if systemctl is-active --quiet nginx; then
   systemctl reload nginx
