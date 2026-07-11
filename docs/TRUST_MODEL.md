@@ -86,13 +86,21 @@ The executed packet passed all three layers; its sanitized evidence is
   restart cannot regenerate a different signed packet after settlement.
 - An independent ProofPurchase signature binds the packet hash to the x402
   payer, payee, price, deadline, USDC nonce, and session. A same-price USDC
-  authorization cannot be relabelled as another report.
+  authorization cannot be relabelled as another report. The two signatures are
+  separate user gestures; the first is not submitted before the second exists.
 - Payment metadata is excluded from the sports `evidenceRoot`, avoiding a
   circular dependency between evidence, anchor transaction, and receipt.
 - A paid retry must return the frozen signed packet. If settlement status is
   uncertain, neither the API nor Agent client retries payment automatically.
-- Recovery only replays the exact original payment header from browser memory;
-  the server stores its hash, never the replayable authorization itself.
+- In-flight recovery only replays the exact original payment header from
+  browser memory. After settlement, a high-entropy browser capability can
+  retrieve the durable entitlement without a facilitator call; the server
+  stores payment-signature hashes, never a replayable authorization.
+- A legacy replay-clock correction is fail-closed: only the current issuer's
+  cryptographically valid packet with no failed integrity check, exactly one
+  issuer-valid-time failure, valid anchor/payment chronology, and a fresh valid
+  Registry v3 read can receive a replacement signature. Evidence root, event
+  hash, and anchor transaction must remain unchanged.
 - Registry v3 removes the auto-latest convenience writer and makes `Final`
   fully immutable.
 - Private keys, provider tokens, signatures used for payment, and raw licensed

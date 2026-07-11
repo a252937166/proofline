@@ -190,8 +190,17 @@ docs/               Architecture, trust, design and judging evidence
   Concurrent duplicates are locked, settled retries are served from cache, and
   uncertain outcomes remain pending across restarts instead of charging again.
 - A second `ProofPurchase` EIP-712 signature binds `packetHash`, payer, payee,
-  amount, deadline, USDC nonce, and browser session. The browser retains the
-  original payment header in memory only; recovery replays that exact header.
+  amount, deadline, USDC nonce, and browser session. The UI requests it from a
+  separate, explicit page click so OKX surfaces confirmation `2/2`; signature
+  `1/2` remains in memory and no payment header is submitted between the two.
+- The browser persists only a high-entropy, non-spendable recovery capability,
+  never `PAYMENT-SIGNATURE`. A settled report can be restored after reload or a
+  Chrome restart without opening a wallet or calling the facilitator.
+- Legacy packets affected by the historical replay-clock issuance bug may be
+  reissued without repayment only when the original integrity/current-issuer
+  signature passes, the issuer-time failure is the sole failed check, payment
+  chronology is valid, and a fresh Injective registry lookup matches. The paid
+  packet hash and replacement packet hash remain explicitly separate.
 - Frozen packet JSON and entitlement state are atomically persisted with mode
   `0600`, so a restart cannot regenerate a different packet for a settled quote.
 - Registry v3 has one concurrency-aware writer, `appendRevision`; the shortcut

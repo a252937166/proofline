@@ -8,6 +8,7 @@ import express, {
 import { timingSafeEqual } from "node:crypto";
 
 import {
+  buildProofPacket,
   decideSettlement,
   issuerKeyId,
   verifyProofPacket,
@@ -48,7 +49,10 @@ import {
   createX402Middleware,
   type PaymentResult,
 } from "./x402.js";
-import { ProofEntitlementStore } from "./proof-entitlement-store.js";
+import {
+  ProofEntitlementStore,
+  type ProofEntitlementRecord,
+} from "./proof-entitlement-store.js";
 import {
   buildProofSubjectPacket,
   createDelayedSnapshotProofSubject,
@@ -80,12 +84,24 @@ export interface ApiRuntime {
 }
 
 const PROOF_QUOTE_TTL_MS = 5 * 60 * 1_000;
+const UNSIGNED_PROOF_WINDOW_LIMIT = 48;
 const MAX_REPLAY_SESSIONS = 64;
 const REPLAY_SESSION_TTL_MS = 60 * 60 * 1_000;
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
+const WEB_RECOVERY_SESSION_PATTERN = /^web_[0-9a-f]{32}$/;
 const EVENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PAID_PROOF_WINDOW_MS = 60_000;
 const PAID_PROOF_WINDOW_LIMIT = 12;
+
+class ProofRecoveryError extends Error {
+  constructor(
+    message: string,
+    readonly status: 409 | 503 = 409,
+  ) {
+    super(message);
+    this.name = "ProofRecoveryError";
+  }
+}
 
 function requestSessionId(req: Request): string {
   const value = req.get("X-Proofline-Session")?.trim();
@@ -278,6 +294,246 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     );
   }
   const proofEntitlements = new ProofEntitlementStore(entitlementFile);
+  const verifyOnchainCommitment = async (
+    packet: ProofPacket,
+  ): Promise<Record<string, unknown>> => {
+    if (packet.anchor?.mode !== "injective-testnet") {
+      return {
+        checked: false,
+        valid: false,
+        mode: packet.anchor?.mode ?? "none",
+        reason:
+          "Demo or missing receipts have no public registry transaction. Only packet/hash consistency was recomputed.",
+      };
+    }
+    if (anchorService.mode !== "injective-testnet") {
+      return {
+        checked: false,
+        valid: false,
+        mode: "injective-testnet",
+        reason:
+          "The packet claims a testnet anchor, but this API instance is not configured with the trusted registry RPC/address.",
+      };
+    }
+    try {
+      return await anchorService.verify({
+        matchId: packet.match.id,
+        eventHash: packet.verification.canonical.eventHash,
+        evidenceRoot: packet.evidenceRoot,
+        verificationConfidenceBps: packet.verification.confidenceBps,
+        anchorConfidenceBps: packet.anchor.confidenceBps,
+        observedAt: packet.verification.canonical.occurredAt,
+        anchoredAt: packet.anchor.anchoredAt,
+        ...(packet.anchor.txHash ? { txHash: packet.anchor.txHash } : {}),
+        ...(packet.anchor.contractAddress
+          ? { contractAddress: packet.anchor.contractAddress }
+          : {}),
+        ...(packet.anchor.blockNumber
+          ? { blockNumber: packet.anchor.blockNumber }
+          : {}),
+        ...(packet.anchor.explorerUrl
+          ? { explorerUrl: packet.anchor.explorerUrl }
+          : {}),
+      });
+    } catch {
+      return {
+        checked: false,
+        valid: false,
+        mode: "injective-testnet",
+        reason:
+          "Fresh registry verification was temporarily unavailable. No on-chain validity claim was made.",
+      };
+    }
+  };
+  type SettledProofResolution = {
+    packet: ProofPacket;
+    reissued: boolean;
+    reason?: "replay-clock-before-issuer-valid-from";
+  };
+  const reissuePromises = new Map<string, Promise<SettledProofResolution>>();
+  const validateStoredReplacement = async (
+    original: ProofPacket,
+    replacement: unknown,
+  ): Promise<ProofPacket> => {
+    if (!isProofPacket(replacement)) {
+      throw new ProofRecoveryError(
+        "The stored replacement packet is malformed; recovery stopped without changing the entitlement.",
+      );
+    }
+    if (
+      replacement.evidenceRoot !== original.evidenceRoot ||
+      replacement.verification.canonical.eventHash !==
+        original.verification.canonical.eventHash ||
+      replacement.anchor?.txHash?.toLowerCase() !==
+        original.anchor?.txHash?.toLowerCase()
+    ) {
+      throw new ProofRecoveryError(
+        "The stored replacement does not preserve the paid evidence and anchor commitment.",
+      );
+    }
+    const report = await verifyProofPacket(replacement, new Date(), {
+      expectedIssuerAddress: issuer.address,
+      expectedIssuerValidFrom: issuer.validFrom,
+      trustedIssuerHistory,
+    });
+    if (!report.valid) {
+      throw new ProofRecoveryError(
+        "The stored replacement no longer passes the current issuer policy.",
+      );
+    }
+    return replacement;
+  };
+  const resolveSettledProof = async (
+    record: ProofEntitlementRecord,
+  ): Promise<SettledProofResolution> => {
+    if (record.status !== "settled" || !isProofPacket(record.packet)) {
+      throw new ProofRecoveryError(
+        "The settled entitlement does not contain a valid frozen proof packet.",
+      );
+    }
+    const original = record.packet;
+    if (record.reissuedPacket !== undefined) {
+      return {
+        packet: await validateStoredReplacement(
+          original,
+          record.reissuedPacket,
+        ),
+        reissued: true,
+        reason: "replay-clock-before-issuer-valid-from",
+      };
+    }
+
+    const originalReport = await verifyProofPacket(original, new Date(), {
+      expectedIssuerAddress: issuer.address,
+      expectedIssuerValidFrom: issuer.validFrom,
+      trustedIssuerHistory,
+    });
+    if (originalReport.valid) {
+      return { packet: original, reissued: false };
+    }
+
+    const failedChecks = originalReport.checks
+      .filter((check) => !check.passed)
+      .map((check) => check.id);
+    const issuedAt = Date.parse(original.issuedAt);
+    const issuerValidFrom = Date.parse(issuer.validFrom);
+    const anchoredAt = Date.parse(original.anchor?.anchoredAt ?? "");
+    const quotedAt = Date.parse(record.quotedAt);
+    const pendingAt = Date.parse(record.pendingAt ?? "");
+    const settledAt = Date.parse(record.settledAt ?? "");
+    const currentIssuerMatches =
+      originalReport.integrity.valid &&
+      originalReport.signature.cryptographicValid &&
+      originalReport.signature.recoveredAddress?.toLowerCase() ===
+        issuer.address.toLowerCase() &&
+      original.issuerAddress.toLowerCase() === issuer.address.toLowerCase() &&
+      original.issuerKeyId.toLowerCase() === issuer.keyId.toLowerCase();
+    const exactReplayClockFailure =
+      failedChecks.length === 1 &&
+      failedChecks[0] === "issuer-signature" &&
+      currentIssuerMatches &&
+      !originalReport.signature.trustedIssuer &&
+      Number.isFinite(issuedAt) &&
+      Number.isFinite(issuerValidFrom) &&
+      issuedAt < issuerValidFrom &&
+      Date.now() >= issuerValidFrom;
+    const chronologyValid =
+      original.anchor?.mode === "injective-testnet" &&
+      original.anchor.confirmed === true &&
+      Number.isFinite(anchoredAt) &&
+      Number.isFinite(quotedAt) &&
+      Number.isFinite(pendingAt) &&
+      Number.isFinite(settledAt) &&
+      issuerValidFrom <= anchoredAt &&
+      anchoredAt <= quotedAt &&
+      quotedAt <= pendingAt &&
+      pendingAt <= settledAt;
+    if (!exactReplayClockFailure || !chronologyValid) {
+      throw new ProofRecoveryError(
+        "The paid packet is not eligible for automatic replay-clock correction; no new signature or payment was created.",
+      );
+    }
+
+    const key = `${record.sessionId}:${record.packetHash.toLowerCase()}`;
+    const active = reissuePromises.get(key);
+    if (active) return active;
+    const task = (async (): Promise<SettledProofResolution> => {
+      const latest = proofEntitlements.find(record.sessionId, record.packetHash);
+      if (latest?.reissuedPacket !== undefined) {
+        return {
+          packet: await validateStoredReplacement(
+            original,
+            latest.reissuedPacket,
+          ),
+          reissued: true,
+          reason: "replay-clock-before-issuer-valid-from",
+        };
+      }
+      const onchain = await verifyOnchainCommitment(original);
+      if (onchain.checked !== true) {
+        throw new ProofRecoveryError(
+          "The Injective registry is temporarily unavailable; the settled entitlement is preserved and no payment should be repeated.",
+          503,
+        );
+      }
+      if (onchain.valid !== true) {
+        throw new ProofRecoveryError(
+          "The current Injective registry state does not match the paid packet, so automatic reissuance was refused.",
+        );
+      }
+
+      const replacement = await buildProofPacket({
+        match: original.match,
+        eventId: original.eventId,
+        observations: original.observations,
+        issuerPrivateKey,
+        verification: original.verification,
+        ...(original.anchor ? { anchor: original.anchor } : {}),
+        now: new Date(),
+      });
+      if (
+        replacement.evidenceRoot !== original.evidenceRoot ||
+        replacement.verification.canonical.eventHash !==
+          original.verification.canonical.eventHash ||
+        replacement.anchor?.txHash?.toLowerCase() !==
+          original.anchor?.txHash?.toLowerCase()
+      ) {
+        throw new ProofRecoveryError(
+          "Replay-clock correction changed the evidence commitment and was discarded.",
+        );
+      }
+      const replacementReport = await verifyProofPacket(
+        replacement,
+        new Date(),
+        {
+          expectedIssuerAddress: issuer.address,
+          expectedIssuerValidFrom: issuer.validFrom,
+          trustedIssuerHistory,
+        },
+      );
+      if (!replacementReport.valid) {
+        throw new ProofRecoveryError(
+          "The corrected packet did not pass current issuer verification and was discarded.",
+        );
+      }
+      proofEntitlements.markReissued(
+        record.sessionId,
+        record.packetHash,
+        replacement,
+      );
+      return {
+        packet: replacement,
+        reissued: true,
+        reason: "replay-clock-before-issuer-valid-from",
+      };
+    })();
+    reissuePromises.set(key, task);
+    try {
+      return await task;
+    } finally {
+      if (reissuePromises.get(key) === task) reissuePromises.delete(key);
+    }
+  };
   const replayFor = (req: Request): ReplayEngine => {
     const sessionId = requestSessionId(req);
     if (sessionId === "default") return engine;
@@ -315,7 +571,13 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     replaySessions.clear();
   };
   const app = express();
+  // Production terminates TLS at the loopback Nginx proxy. Trust exactly that
+  // hop so rate limits isolate real client IPs without honoring spoofed XFF
+  // from direct non-loopback connections.
+  app.set("trust proxy", "loopback");
   const paidProofWindows = new Map<string, number[]>();
+  const unsignedProofWindows = new Map<string, number[]>();
+  const proofRecoveryWindows = new Map<string, number[]>();
   const rpcProxyWindows = new Map<string, number[]>();
   const mcpRuntime = new McpRuntimeStore(env.PROOFLINE_MCP_AUDIT_FILE);
   const mcpAuditAuthorized = (req: Request): boolean => {
@@ -979,6 +1241,35 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
 
   const paidProofRateLimit: RequestHandler = (req, res, next) => {
     if (!req.get("PAYMENT-SIGNATURE") && !req.get("X-PAYMENT")) {
+      const now = Date.now();
+      const key = req.ip ?? "unknown";
+      const recent = (unsignedProofWindows.get(key) ?? []).filter(
+        (at) => at + PROOF_QUOTE_TTL_MS > now,
+      );
+      if (recent.length >= UNSIGNED_PROOF_WINDOW_LIMIT) {
+        res.set("Retry-After", "300");
+        res.status(429).json({
+          error: "proof_quote_rate_limited",
+          message:
+            "Too many unsigned proof quotes for this IP. Existing frozen quotes remain valid; retry later.",
+        });
+        return;
+      }
+      for (const [candidate, attempts] of unsignedProofWindows) {
+        if (
+          attempts.every((at) => at + PROOF_QUOTE_TTL_MS <= now)
+        ) {
+          unsignedProofWindows.delete(candidate);
+        }
+      }
+      if (!unsignedProofWindows.has(key) && unsignedProofWindows.size >= 1_024) {
+        const oldest = unsignedProofWindows.keys().next().value as
+          | string
+          | undefined;
+        if (oldest) unsignedProofWindows.delete(oldest);
+      }
+      recent.push(now);
+      unsignedProofWindows.set(key, recent);
       next();
       return;
     }
@@ -999,6 +1290,161 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     paidProofWindows.set(key, recent);
     next();
   };
+
+  const proofRecoveryRateLimit: RequestHandler = (req, res, next) => {
+    const now = Date.now();
+    for (const [candidate, attempts] of proofRecoveryWindows) {
+      const active = attempts.filter(
+        (at) => at + PAID_PROOF_WINDOW_MS > now,
+      );
+      if (active.length === 0) proofRecoveryWindows.delete(candidate);
+      else if (active.length !== attempts.length) {
+        proofRecoveryWindows.set(candidate, active);
+      }
+    }
+    // Keying by IP rather than attacker-controlled session IDs prevents random
+    // recovery capabilities from growing this map without bound.
+    const key = req.ip ?? "unknown";
+    const recent = (proofRecoveryWindows.get(key) ?? []).filter(
+      (at) => at + PAID_PROOF_WINDOW_MS > now,
+    );
+    if (recent.length >= PAID_PROOF_WINDOW_LIMIT) {
+      res.set("Retry-After", "60");
+      res.status(429).json({
+        error: "proof_recovery_rate_limited",
+        message: "Too many settled proof recovery attempts for this session.",
+      });
+      return;
+    }
+    if (!proofRecoveryWindows.has(key) && proofRecoveryWindows.size >= 1_024) {
+      const oldest = proofRecoveryWindows.keys().next().value as
+        | string
+        | undefined;
+      if (oldest) proofRecoveryWindows.delete(oldest);
+    }
+    recent.push(now);
+    proofRecoveryWindows.set(key, recent);
+    next();
+  };
+
+  const findProofRecoveryEntitlement: RequestHandler = (req, res, next) => {
+    const suppliedSession = req.get("X-Proofline-Session")?.trim() ?? "";
+    const matchId =
+      req.body && typeof req.body === "object"
+        ? (req.body as Record<string, unknown>).matchId
+        : undefined;
+    const eventId =
+      req.body && typeof req.body === "object"
+        ? (req.body as Record<string, unknown>).eventId
+        : undefined;
+    // The browser session is an opaque recovery capability. Weak/default API
+    // sessions never receive paid content without the original x402 header.
+    if (
+      !WEB_RECOVERY_SESSION_PATTERN.test(suppliedSession) ||
+      typeof matchId !== "string" ||
+      matchId.length === 0 ||
+      matchId.length > 128 ||
+      !validEventId(eventId)
+    ) {
+      res.status(404).json({
+        error: "settled_proof_not_found",
+        message: "No settled proof entitlement is available for this browser session.",
+      });
+      return;
+    }
+    const record = proofEntitlements.findSettledBySubject(
+      suppliedSession,
+      matchId,
+      eventId,
+    );
+    if (!record) {
+      res.status(404).json({
+        error: "settled_proof_not_found",
+        message: "No settled proof entitlement is available for this browser session.",
+      });
+      return;
+    }
+    res.locals.proofRecoveryEntitlement = record;
+    next();
+  };
+
+  app.post(
+    "/api/proofs/recover",
+    proofRecoveryRateLimit,
+    findProofRecoveryEntitlement,
+    asyncHandler(async (req, res) => {
+      const record = res.locals
+        .proofRecoveryEntitlement as ProofEntitlementRecord;
+      try {
+        const resolution = await resolveSettledProof(record);
+        res.set("Cache-Control", "private, no-store");
+        res.json({
+          schema: "proofline.paid-proof.v1",
+          packet: resolution.packet,
+          payment: {
+            mode: config.x402.mode,
+            simulated: config.x402.mode !== "live",
+            cached: true,
+            alreadyPaid: true,
+            valueTransferred: false,
+            valueTransferredByThisRequest: false,
+            facilitatorCalledByThisRequest: false,
+            ...(record.transactionHash
+              ? { transactionHash: record.transactionHash }
+              : {}),
+            ...(record.payer ? { payer: record.payer } : {}),
+            disclosure:
+              "Recovered from the durable settled entitlement for this browser session. This request did not call the facilitator, open a wallet, or transfer USDC.",
+          },
+          quote: {
+            packetHash: record.packetHash,
+            frozen: true,
+            paidPacketHash: record.packetHash,
+            replacementPacketHash: resolution.packet.packetHash,
+          },
+          entitlement: {
+            status: "settled",
+            paidPacketHash: record.packetHash,
+            ...(record.transactionHash
+              ? { transactionHash: record.transactionHash }
+              : {}),
+          },
+          correction: resolution.reissued
+            ? {
+                applied: true,
+                reason: resolution.reason,
+                replacementPacketHash: resolution.packet.packetHash,
+                evidenceRootUnchanged: true,
+                anchorTransactionUnchanged: true,
+              }
+            : { applied: false },
+          provenance: {
+            dataMode:
+              "replayDisclosure" in resolution.packet.match
+                ? "historical-replay"
+                : "delayed",
+            trustBoundary:
+              "Recovery preserves the originally paid evidence root and Injective anchor. A corrected issuer timestamp changes the packet hash, not the evidence commitment.",
+          },
+        });
+      } catch (error) {
+        if (error instanceof ProofRecoveryError) {
+          res.status(error.status).json({
+            error:
+              error.status === 503
+                ? "settled_proof_recovery_unavailable"
+                : "settled_proof_not_reissuable",
+            paymentState: "settled",
+            message: error.message,
+            disclosure:
+              "The original settled entitlement remains unchanged. Do not pay again while recovery is unavailable.",
+          });
+          return;
+        }
+        throw error;
+      }
+    }),
+  );
 
   const prepareProof: RequestHandler = asyncHandler(async (req, res, next) => {
     const replay = replayFor(req);
@@ -1255,18 +1701,36 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     (_req, res) => {
       const packet = res.locals.packet as ProofPacket;
       const payment = res.locals.payment as PaymentResult;
+      const paidPacketHash = res.locals.proofQuoteId as `0x${string}`;
+      const correctedPacket =
+        packet.packetHash.toLowerCase() !== paidPacketHash.toLowerCase();
       res.json({
         schema: "proofline.paid-proof.v1",
         packet,
         payment,
         quote: {
-          packetHash: res.locals.proofQuoteId,
+          packetHash: paidPacketHash,
           frozen: true,
+          paidPacketHash,
+          replacementPacketHash: packet.packetHash,
         },
+        ...(correctedPacket
+          ? {
+              correction: {
+                applied: true,
+                reason: "replay-clock-before-issuer-valid-from",
+                replacementPacketHash: packet.packetHash,
+                evidenceRootUnchanged: true,
+                anchorTransactionUnchanged: true,
+              },
+            }
+          : {}),
         provenance: {
           ...(res.locals.proofProvenance as Record<string, unknown>),
           trustBoundary:
-            "A matching anchor proves hash commitment at a time; source agreement and the verifier establish evidence quality.",
+            correctedPacket
+              ? "This cached x402 receipt remains bound to paidPacketHash. The replacement packet changes only issuer timing metadata and preserves the evidence root and Injective anchor."
+              : "A matching anchor proves hash commitment at a time; source agreement and the verifier establish evidence quality.",
         },
       });
     },
@@ -1293,54 +1757,7 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
         expectedIssuerValidFrom: issuer.validFrom,
         trustedIssuerHistory,
       });
-      let onchain: Record<string, unknown>;
-      if (candidate.anchor?.mode !== "injective-testnet") {
-        onchain = {
-          checked: false,
-          valid: false,
-          mode: candidate.anchor?.mode ?? "none",
-          reason:
-            "Demo or missing receipts have no public registry transaction. Only packet/hash consistency was recomputed.",
-        };
-      } else if (anchorService.mode !== "injective-testnet") {
-        onchain = {
-          checked: false,
-          valid: false,
-          mode: "injective-testnet",
-          reason:
-            "The packet claims a testnet anchor, but this API instance is not configured with the trusted registry RPC/address.",
-        };
-      } else {
-        try {
-          onchain = await anchorService.verify({
-            matchId: candidate.match.id,
-            eventHash: candidate.verification.canonical.eventHash,
-            evidenceRoot: candidate.evidenceRoot,
-            verificationConfidenceBps: candidate.verification.confidenceBps,
-            anchorConfidenceBps: candidate.anchor.confidenceBps,
-            observedAt: candidate.verification.canonical.occurredAt,
-            anchoredAt: candidate.anchor.anchoredAt,
-            ...(candidate.anchor.txHash ? { txHash: candidate.anchor.txHash } : {}),
-            ...(candidate.anchor.contractAddress
-              ? { contractAddress: candidate.anchor.contractAddress }
-              : {}),
-            ...(candidate.anchor.blockNumber
-              ? { blockNumber: candidate.anchor.blockNumber }
-              : {}),
-            ...(candidate.anchor.explorerUrl
-              ? { explorerUrl: candidate.anchor.explorerUrl }
-              : {}),
-          });
-        } catch (error) {
-          onchain = {
-            checked: false,
-            valid: false,
-            mode: "injective-testnet",
-            reason:
-              "Fresh registry verification was temporarily unavailable. No on-chain validity claim was made.",
-          };
-        }
-      }
+      const onchain = await verifyOnchainCommitment(candidate);
       res.status(report.valid ? 200 : 422).json({
         ...report,
         integrityOnly: false,

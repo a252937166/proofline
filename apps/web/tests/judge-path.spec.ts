@@ -239,7 +239,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200, headers: R
   await route.fulfill({ status, contentType: "application/json", headers, body: JSON.stringify(body) });
 }
 
-async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFailure?: boolean; anchorMode?: "demo" | "injective-testnet"; sessionHeaders?: string[]; paymentHeaders?: string[]; proofRequests?: string[] } = {}) {
+async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFailure?: boolean; paymentPendingConflict?: boolean; recoverSettled?: boolean; verificationNegative?: boolean; verificationMinimal422?: boolean; anchorMode?: "demo" | "injective-testnet"; sessionHeaders?: string[]; paymentHeaders?: string[]; proofRequests?: string[]; recoveryRequests?: string[] } = {}) {
   let cursor = 0;
   let paymentFailureInjected = false;
   await page.route("**/api/**", async (route) => {
@@ -444,9 +444,42 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
       });
       return;
     }
+    if (url.pathname.endsWith("/proofs/recover")) {
+      options.recoveryRequests?.push(request.url());
+      if (!options.recoverSettled) {
+        await fulfillJson(route, {
+          error: "settled_proof_not_found",
+          message: "No settled proof entitlement is available for this browser session.",
+        }, 404);
+        return;
+      }
+      await fulfillJson(route, {
+        ...paidPacket(15, "final-result"),
+        payment: {
+          cached: true,
+          alreadyPaid: true,
+          valueTransferredByThisRequest: false,
+          facilitatorCalledByThisRequest: false,
+        },
+        correction: {
+          applied: true,
+          reason: "replay-clock-before-issuer-valid-from",
+          replacementPacketHash: PACKET_HASH,
+        },
+      });
+      return;
+    }
     if (url.pathname.endsWith("/proofs/verify")) {
+      if (options.verificationMinimal422) {
+        await fulfillJson(route, {
+          valid: false,
+          error: "invalid_proof_packet",
+          message: "The proof packet could not be deterministically verified.",
+        }, 422);
+        return;
+      }
       const body = request.postDataJSON() as { packet: { eventId: string } };
-      const valid = !body.packet.eventId.endsWith("-tampered");
+      const valid = !options.verificationNegative && !body.packet.eventId.endsWith("-tampered");
       await fulfillJson(route, {
         valid,
         packetHash: PACKET_HASH,
@@ -464,13 +497,21 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
         onchain: { checked: options.live === true, valid: options.live === true && valid, mode: options.live ? "injective-testnet" : "demo", reason: options.live ? "Registry matched." : "Demo mode." },
         computed: {},
         disclosure: "Independent verification result.",
-      });
+      }, valid ? 200 : 422);
       return;
     }
     if (url.pathname.includes("/proof")) {
       const requestedEventId = url.searchParams.get("eventId") ?? "final-result";
       if (request.headers()["payment-signature"]) {
         options.paymentHeaders?.push(request.headers()["payment-signature"]!);
+        if (options.paymentPendingConflict) {
+          await fulfillJson(route, {
+            error: "payment-pending",
+            paymentState: "pending-uncertain",
+            message: "This exact authorization is already in flight.",
+          }, 409);
+          return;
+        }
         if (options.paymentNetworkFailure && !paymentFailureInjected) {
           paymentFailureInjected = true;
           await route.abort("failed");
@@ -700,7 +741,12 @@ test("the drawer cannot disappear while a wallet authorization is awaiting confi
 });
 
 test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, and links the explorer", async ({ page }) => {
-  await mockApi(page, { live: true, anchorMode: "injective-testnet" });
+  const paymentHeaders: string[] = [];
+  await mockApi(page, {
+    live: true,
+    anchorMode: "injective-testnet",
+    paymentHeaders,
+  });
   await page.goto("/");
   await page.getByTestId("run-conflict-replay").click();
   const openProof = page.getByTestId("open-proof-drawer");
@@ -710,6 +756,78 @@ test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, an
   await expect(page.getByTestId("signature-sequence")).toContainText("2 signatures · 1 payment");
 
   await page.evaluate(() => {
+    (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes = [];
+    window.ethereum = {
+      request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+        if (method === "eth_chainId") return "0x59f";
+        if (method === "eth_requestAccounts") return ["0x3333333333333333333333333333333333333333"];
+        if (method === "eth_signTypedData_v4") {
+          const typedData = JSON.parse(String(params?.[1])) as { primaryType: string };
+          (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes?.push(typedData.primaryType);
+          return `0x${"66".repeat(65)}`;
+        }
+        return null;
+      },
+    };
+  });
+  await page.getByTestId("submit-proof-payment").click();
+
+  // The first gesture authorizes USDC only. ProofPurchase must remain behind a
+  // second explicit page gesture so Chrome/OKX can surface its own prompt.
+  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
+  await expect(page.getByTestId("proof-binding-handoff")).toContainText(
+    "Signature 1/2 confirmed · no payment sent",
+  );
+  expect(paymentHeaders).toEqual([]);
+  expect(await page.evaluate(() => (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes)).toEqual([
+    "TransferWithAuthorization",
+  ]);
+
+  await page.getByTestId("submit-proof-binding").click();
+  await expect(page.getByText("Report delivered")).toBeVisible();
+  expect(paymentHeaders).toHaveLength(1);
+  expect(await page.evaluate(() => (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes)).toEqual([
+    "TransferWithAuthorization",
+    "ProofPurchase",
+  ]);
+  const tamperControl = page.getByTestId("tamper-control");
+  await expect(tamperControl).toBeVisible();
+  await expect(tamperControl).toBeEnabled();
+  await tamperControl.click();
+  await expect(tamperControl).toContainText("PASS");
+});
+
+test("a settled browser entitlement restores and verifies without opening a wallet or paying again", async ({ page }) => {
+  const paymentHeaders: string[] = [];
+  const recoveryRequests: string[] = [];
+  await mockApi(page, {
+    live: true,
+    anchorMode: "injective-testnet",
+    recoverSettled: true,
+    paymentHeaders,
+    recoveryRequests,
+  });
+  await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
+  await page.getByTestId("open-proof-drawer").click();
+  await page.getByTestId("prepare-proof-report").click();
+
+  await expect(page.getByText("Report delivered")).toBeVisible({ timeout: 40_000 });
+  await expect(page.getByText(/corrected its legacy replay timestamp/i)).toBeVisible();
+  await expect(page.getByTestId("signature-sequence")).toHaveCount(0);
+  expect(recoveryRequests).toHaveLength(1);
+  expect(paymentHeaders).toEqual([]);
+});
+
+test("a 409 pending payment preserves the bound header and never offers a fresh signature", async ({ page }) => {
+  const paymentHeaders: string[] = [];
+  await mockApi(page, {
+    live: true,
+    anchorMode: "injective-testnet",
+    paymentPendingConflict: true,
+    paymentHeaders,
+  });
+  await page.addInitScript(() => {
     window.ethereum = {
       request: async ({ method }: { method: string }) => {
         if (method === "eth_chainId") return "0x59f";
@@ -719,13 +837,44 @@ test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, an
       },
     };
   });
+  await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
+  await page.getByTestId("open-proof-drawer").click();
+  await prepareReplayProofQuote(page);
   await page.getByTestId("submit-proof-payment").click();
+  await page.getByTestId("submit-proof-binding").click();
+
+  await expect(page.getByTestId("payment-uncertain")).toBeVisible();
+  await expect(page.getByTestId("payment-uncertain")).toContainText("do not sign again");
+  await expect(page.getByTestId("submit-proof-payment")).toHaveCount(0);
+  expect(paymentHeaders).toHaveLength(1);
+});
+
+test("a structured 422 renders verification failures instead of leaving every layer pending", async ({ page }) => {
+  await mockApi(page, { verificationNegative: true });
+  await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
+  await page.getByTestId("open-proof-drawer").click();
+  await prepareReplayProofQuote(page);
+  await page.getByTestId("submit-proof-payment").click();
+
   await expect(page.getByText("Report delivered")).toBeVisible();
-  const tamperControl = page.getByTestId("tamper-control");
-  await expect(tamperControl).toBeVisible();
-  await expect(tamperControl).toBeEnabled();
-  await tamperControl.click();
-  await expect(tamperControl).toContainText("PASS");
+  await expect(page.getByText("Packet verification failed")).toBeVisible();
+  await expect(page.locator(".verification-layers")).toContainText("FAIL");
+  await expect(page.locator(".verification-layers .layer-fail")).toHaveCount(2);
+});
+
+test("a malformed 422 remains a retryable verifier error without crashing the delivered report", async ({ page }) => {
+  await mockApi(page, { verificationMinimal422: true });
+  await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
+  await page.getByTestId("open-proof-drawer").click();
+  await prepareReplayProofQuote(page);
+  await page.getByTestId("submit-proof-payment").click();
+
+  await expect(page.getByText("Report delivered")).toBeVisible();
+  await expect(page.getByText(/could not be deterministically verified/i)).toBeVisible();
+  await expect(page.getByRole("button", { name: /retry packet verification/i })).toBeVisible();
 });
 
 test("wallet rejection is an error; post-signature network ambiguity is payment-uncertain with recovery evidence", async ({ page }) => {
@@ -773,6 +922,11 @@ test("wallet rejection is an error; post-signature network ambiguity is payment-
   });
   await expect(walletButton).toBeEnabled();
   await walletButton.click();
+  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
+  expect(paymentHeaders).toHaveLength(0);
+  expect(await page.evaluate(() => (window as Window & { __prooflineSignCount?: number }).__prooflineSignCount)).toBe(1);
+
+  await page.getByTestId("submit-proof-binding").click();
   await expect(page.getByTestId("payment-uncertain")).toBeVisible();
   await expect(page.getByTestId("payment-uncertain")).toContainText("Authorization nonce");
   await expect(page.getByTestId("payment-uncertain")).toContainText("Facilitator / payee");
@@ -817,9 +971,56 @@ test("rejecting the second ProofPurchase signature submits no payment authorizat
   await prepareReplayProofQuote(page);
   await page.getByTestId("submit-proof-payment").click();
 
+  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
+  await expect(page.getByTestId("submit-proof-binding")).toBeEnabled();
+  expect(paymentHeaders).toHaveLength(0);
+
+  await page.getByTestId("submit-proof-binding").click();
   await expect(page.getByText(/User rejected ProofPurchase binding/)).toBeVisible();
+  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
+  await expect(page.getByTestId("submit-proof-binding")).toBeEnabled();
+  await expect(page.getByText(/no payment was attempted/i)).toBeVisible();
   await expect(page.getByTestId("payment-uncertain")).toHaveCount(0);
   expect(paymentHeaders).toHaveLength(0);
+});
+
+test("discarding the first authorization clears the handoff without submitting payment", async ({ page }) => {
+  const paymentHeaders: string[] = [];
+  await mockApi(page, { live: true, paymentHeaders });
+  await page.addInitScript(() => {
+    (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes = [];
+    window.ethereum = {
+      request: async ({ method, params }: { method: string; params?: unknown[] }) => {
+        if (method === "eth_chainId") return "0x59f";
+        if (method === "eth_requestAccounts") return ["0x3333333333333333333333333333333333333333"];
+        if (method === "eth_signTypedData_v4") {
+          const typedData = JSON.parse(String(params?.[1])) as { primaryType: string };
+          (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes?.push(typedData.primaryType);
+          return `0x${"66".repeat(65)}`;
+        }
+        return null;
+      },
+    };
+  });
+  await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
+  await page.getByTestId("open-proof-drawer").click();
+  await prepareReplayProofQuote(page);
+
+  await page.getByTestId("submit-proof-payment").click();
+  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
+  expect(paymentHeaders).toEqual([]);
+
+  await page.getByTestId("discard-payment-authorization").click();
+  await expect(page.getByTestId("proof-binding-handoff")).toHaveCount(0);
+  await expect(page.getByTestId("submit-proof-payment")).toContainText(
+    "Open wallet · sign authorization 1/2",
+  );
+  await expect(page.getByText(/discarded in memory/i)).toBeVisible();
+  expect(paymentHeaders).toEqual([]);
+  expect(await page.evaluate(() => (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes)).toEqual([
+    "TransferWithAuthorization",
+  ]);
 });
 
 test("two browser contexts receive isolated replay session ids", async ({ browser }) => {

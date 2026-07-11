@@ -14,12 +14,25 @@ import type {
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "/api";
 const SESSION_STORAGE_KEY = "proofline.replay-session.v1";
+const RECOVERY_STORAGE_KEY = "proofline.settled-proof-session.v1";
 
 function replaySessionId(): string {
+  const valid = (value: string | null): value is string =>
+    Boolean(value && /^web_[0-9a-f]{32}$/.test(value));
   const existing = sessionStorage.getItem(SESSION_STORAGE_KEY);
-  if (existing && /^[A-Za-z0-9_-]{8,64}$/.test(existing)) return existing;
+  const recovery = localStorage.getItem(RECOVERY_STORAGE_KEY);
+  const reusable = valid(existing) ? existing : valid(recovery) ? recovery : null;
+  if (reusable) {
+    sessionStorage.setItem(SESSION_STORAGE_KEY, reusable);
+    localStorage.setItem(RECOVERY_STORAGE_KEY, reusable);
+    return reusable;
+  }
   const created = `web_${crypto.randomUUID().replace(/-/g, "")}`;
   sessionStorage.setItem(SESSION_STORAGE_KEY, created);
+  // This high-entropy ID can recover already-paid report content after a tab
+  // or Chrome restart. It cannot authorize a transfer and no wallet signature,
+  // nonce secret, or PAYMENT-SIGNATURE is persisted.
+  localStorage.setItem(RECOVERY_STORAGE_KEY, created);
   return created;
 }
 
@@ -106,6 +119,36 @@ function findDemoSignature(value: unknown): string | undefined {
   return undefined;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function isProofVerificationResponse(
+  value: unknown,
+): value is ProofVerificationResponse {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const report = value as Partial<ProofVerificationResponse>;
+  return (
+    typeof report.valid === "boolean" &&
+    typeof report.packetHash === "string" &&
+    /^0x[0-9a-fA-F]{64}$/.test(report.packetHash) &&
+    typeof report.recomputedPacketHash === "string" &&
+    /^0x[0-9a-fA-F]{64}$/.test(report.recomputedPacketHash) &&
+    typeof report.checkedAt === "string" &&
+    Array.isArray(report.checks) &&
+    Boolean(report.integrity) &&
+    typeof report.integrity?.valid === "boolean" &&
+    Boolean(report.signature) &&
+    typeof report.signature?.valid === "boolean" &&
+    Boolean(report.onchain) &&
+    typeof report.onchain?.checked === "boolean" &&
+    typeof report.onchain?.valid === "boolean" &&
+    typeof report.onchain?.reason === "string"
+  );
+}
+
 export const api = {
   getReplayState: (signal?: AbortSignal) => request<ReplaySnapshot>("/replay/state", { ...(signal ? { signal } : {}) }),
 
@@ -140,6 +183,37 @@ export const api = {
       `/matches/${encodeURIComponent(matchId)}/decision?eventId=${encodeURIComponent(eventId)}`,
     ),
 
+  async recoverSettledProof(
+    matchId: string,
+    eventId: string,
+    signal?: AbortSignal,
+  ): Promise<ProofPacketResponse | null> {
+    const response = await fetch(`${API_BASE}/proofs/recover`, {
+      method: "POST",
+      redirect: "error",
+      ...(signal ? { signal } : {}),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Proofline-Session": PROOFLINE_SESSION_ID,
+      },
+      body: JSON.stringify({ matchId, eventId }),
+    });
+    const parsed = (await response.json()) as unknown;
+    const body = asRecord(parsed);
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new ApiError(
+        typeof body?.message === "string"
+          ? body.message
+          : `Settled proof recovery failed with HTTP ${response.status}.`,
+        response.status,
+        parsed,
+      );
+    }
+    return parsed as ProofPacketResponse;
+  },
+
   async getProofQuote(matchId: string, eventId: string, signal?: AbortSignal): Promise<PaymentQuote | ProofPacketResponse> {
     const response = await fetch(
       `${API_BASE}/matches/${encodeURIComponent(matchId)}/proof?eventId=${encodeURIComponent(eventId)}`,
@@ -152,15 +226,16 @@ export const api = {
         },
       },
     );
-    const body = (await response.json()) as Record<string, unknown>;
+    const parsed = (await response.json()) as unknown;
+    const body = asRecord(parsed);
 
     if (response.status === 402) {
       const paymentRequired = response.headers.get("PAYMENT-REQUIRED") ?? undefined;
       const decodedRequirement = decodePaymentRequirement(paymentRequired ?? null);
-      const demoSignature = findDemoSignature(body);
+      const demoSignature = findDemoSignature(parsed);
       const quote: PaymentQuote = {
         status: 402,
-        body,
+        body: body ?? {},
       };
       if (paymentRequired) quote.paymentRequired = paymentRequired;
       if (decodedRequirement) quote.decodedRequirement = decodedRequirement;
@@ -170,13 +245,13 @@ export const api = {
 
     if (!response.ok) {
       throw new ApiError(
-        typeof body.message === "string" ? body.message : `Proof request failed with HTTP ${response.status}.`,
+        typeof body?.message === "string" ? body.message : `Proof request failed with HTTP ${response.status}.`,
         response.status,
-        body,
+        parsed,
       );
     }
 
-    return body as unknown as ProofPacketResponse;
+    return parsed as ProofPacketResponse;
   },
 
   submitProofPayment: (matchId: string, eventId: string, signature: string, signal?: AbortSignal) =>
@@ -185,10 +260,32 @@ export const api = {
       { headers: { "PAYMENT-SIGNATURE": signature }, ...(signal ? { signal } : {}) },
     ),
 
-  verifyProof: (packet: ProofPacketResponse["packet"], signal?: AbortSignal) =>
-    request<ProofVerificationResponse>("/proofs/verify", {
+  async verifyProof(packet: ProofPacketResponse["packet"], signal?: AbortSignal) {
+    const response = await fetch(`${API_BASE}/proofs/verify`, {
       method: "POST",
+      redirect: "error",
       ...(signal ? { signal } : {}),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-Proofline-Session": PROOFLINE_SESSION_ID,
+      },
       body: JSON.stringify({ packet }),
-    }),
+    });
+    const body = (await response.json()) as unknown;
+    // A deterministic negative verification is still a complete report. The
+    // UI must render its PASS/FAIL layers instead of replacing them with a
+    // transport error and leaving every layer PENDING.
+    if ((response.ok || response.status === 422) && isProofVerificationResponse(body)) {
+      return body;
+    }
+    const detail = body && typeof body === "object" && "message" in body
+      ? String((body as { message: unknown }).message)
+      : `Proof verification failed with HTTP ${response.status}.`;
+    throw new ApiError(
+      detail,
+      response.status,
+      body,
+    );
+  },
 };
