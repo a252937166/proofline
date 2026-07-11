@@ -3,6 +3,7 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 const MATCH_ID = "WC-2022-WAL-IRN";
 const EVENT_ID = "hennessey-red-86";
 const EVENT_HASH = `0x${"11".repeat(32)}`;
+const FINAL_EVENT_HASH = `0x${"12".repeat(32)}`;
 const PACKET_HASH = `0x${"22".repeat(32)}`;
 const TX_HASH = `0x${"33".repeat(32)}`;
 
@@ -73,6 +74,65 @@ function verification(cursor: number) {
   };
 }
 
+function finalResultRecord(cursor: number, anchorMode: "demo" | "injective-testnet") {
+  const finalCanonical = {
+    matchId: MATCH_ID,
+    eventType: "match_end",
+    minute: 90,
+    stoppage: 11,
+    period: "second-half",
+    score: { home: 0, away: 2 },
+    occurredAt: "2022-11-25T11:55:00.000Z",
+    canonicalJson: "{\"eventType\":\"match_end\",\"score\":{\"away\":2,\"home\":0}}",
+    eventHash: FINAL_EVENT_HASH,
+  };
+  const observations = ["open", ...(cursor >= 13 ? ["fifa"] : [])].map((source, index) => ({
+    id: `obs-final-${source}`,
+    eventId: "final-result",
+    source: {
+      id: `final-${source}`,
+      label: source === "fifa" ? "FIFA match review" : "Open match feed",
+      url: "https://www.fifa.com/",
+      tier: source === "fifa" ? "official" : "independent",
+      reliabilityBps: source === "fifa" ? 9800 : 9000,
+      independenceGroup: source,
+    },
+    receivedAt: `2026-07-10T12:00:${12 + index}.000Z`,
+    payload: {
+      ...finalCanonical,
+      canonicalJson: undefined,
+      eventHash: undefined,
+    },
+  }));
+  const anchored = cursor >= 15;
+  const anchor = anchored ? {
+    receipt: {
+      mode: anchorMode,
+      eventHash: FINAL_EVENT_HASH,
+      confidenceBps: 9650,
+      anchoredAt: "2026-07-10T12:00:15.000Z",
+      confirmed: true,
+      txHash: anchorMode === "injective-testnet" ? TX_HASH : undefined,
+      explorerUrl: anchorMode === "injective-testnet" ? `https://testnet.blockscout.injective.network/tx/${TX_HASH}` : undefined,
+    },
+    simulated: anchorMode === "demo",
+    disclosure: anchorMode === "demo" ? "Deterministic demo commitment. No blockchain transaction." : "Injective testnet receipt.",
+  } : null;
+  return {
+    eventId: "final-result",
+    observations,
+    verification: {
+      ...verification(cursor),
+      eventId: "final-result",
+      canonical: finalCanonical,
+      state: cursor >= 13 ? "verified" : "observed",
+      confidenceBps: cursor >= 13 ? 9650 : 5800,
+      conflicts: [],
+    },
+    anchor,
+  };
+}
+
 function snapshot(cursor: number, anchorMode: "demo" | "injective-testnet" = "demo") {
   const hasEvent = cursor >= 3;
   const finished = cursor >= 14;
@@ -103,6 +163,7 @@ function snapshot(cursor: number, anchorMode: "demo" | "injective-testnet" = "de
       cursor,
       totalFrames: 15,
       running: false,
+      processing: false,
       complete: cursor >= 15,
       nextFrame: cursor >= 15 ? null : { id: `frame-${cursor + 1}`, atMs: cursor * 650, kind: "observe", label: `Frame ${cursor + 1}` },
     },
@@ -111,7 +172,7 @@ function snapshot(cursor: number, anchorMode: "demo" | "injective-testnet" = "de
       observations: [observation("obs-good", "red"), ...(cursor >= 4 ? [observation("obs-bad", "yellow", cursor >= 6)] : [])],
       verification: verification(cursor),
       anchor,
-    }] : [],
+    }, ...(cursor >= 12 ? [finalResultRecord(cursor, anchorMode)] : [])] : [],
     anchors: anchor ? [anchor] : [],
     lastFrame: cursor ? { id: `frame-${cursor}`, atMs: cursor * 650, kind: "observe", label: `Frame ${cursor}` } : null,
     errors: [],
@@ -151,9 +212,9 @@ function integrations(live = false) {
   };
 }
 
-function paidPacket(cursor = 15) {
+function paidPacket(cursor = 15, eventId = EVENT_ID) {
   const state = snapshot(cursor);
-  const record = state.events[0]!;
+  const record = state.events.find((event) => event.eventId === eventId) ?? state.events[0]!;
   return {
     schema: "proofline.paid-proof.v1",
     packet: {
@@ -161,7 +222,7 @@ function paidPacket(cursor = 15) {
       algorithm: { name: "VARA", version: "1" },
       generatedAt: "2026-07-10T12:00:11.000Z",
       match: state.match,
-      eventId: EVENT_ID,
+      eventId: record.eventId,
       observations: record.observations,
       verification: record.verification,
       anchor: record.anchor?.receipt,
@@ -178,7 +239,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200, headers: R
   await route.fulfill({ status, contentType: "application/json", headers, body: JSON.stringify(body) });
 }
 
-async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFailure?: boolean; anchorMode?: "demo" | "injective-testnet"; sessionHeaders?: string[]; paymentHeaders?: string[] } = {}) {
+async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFailure?: boolean; anchorMode?: "demo" | "injective-testnet"; sessionHeaders?: string[]; paymentHeaders?: string[]; proofRequests?: string[] } = {}) {
   let cursor = 0;
   let paymentFailureInjected = false;
   await page.route("**/api/**", async (route) => {
@@ -407,6 +468,7 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
       return;
     }
     if (url.pathname.includes("/proof")) {
+      const requestedEventId = url.searchParams.get("eventId") ?? "final-result";
       if (request.headers()["payment-signature"]) {
         options.paymentHeaders?.push(request.headers()["payment-signature"]!);
         if (options.paymentNetworkFailure && !paymentFailureInjected) {
@@ -414,7 +476,31 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
           await route.abort("failed");
           return;
         }
-        await fulfillJson(route, paidPacket());
+        await fulfillJson(route, paidPacket(15, requestedEventId));
+        return;
+      }
+      options.proofRequests?.push(request.url());
+      const proofState = snapshot(cursor, options.anchorMode);
+      const proofEvent = proofState.events.find(
+        (event) => event.eventId === requestedEventId,
+      );
+      const finalProofReady =
+        requestedEventId !== "final-result" ||
+        Boolean(
+          proofState.replay.complete &&
+          !proofState.replay.processing &&
+          proofEvent?.anchor?.receipt.confirmed,
+        );
+      if (
+        url.pathname.includes(`/matches/${MATCH_ID}/proof`) &&
+        (!proofEvent || !finalProofReady)
+      ) {
+        await fulfillJson(route, {
+          error: "proof_event_not_ready",
+          message: "The requested event belongs to this replay but has not been processed yet. Advance the replay before requesting its proof.",
+          paymentState: "not-requested",
+          progress: { cursor, totalFrames: 15, complete: false },
+        }, 409);
         return;
       }
       const requirement = {
@@ -445,6 +531,15 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
     }
     await fulfillJson(route, { message: `Unhandled mock route: ${url.pathname}` }, 404);
   });
+}
+
+async function prepareReplayProofQuote(page: Page) {
+  const prepare = page.getByTestId("prepare-proof-report");
+  await expect(prepare).toBeVisible();
+  await prepare.click();
+  // The full evidence rail intentionally renders every frame. Keep this above
+  // the default assertion window for slower single-worker CI hosts.
+  await expect(page.getByText("402", { exact: true })).toBeVisible({ timeout: 40_000 });
 }
 
 test("match selector exposes delayed 2026 provenance without presenting it as live", async ({ page }) => {
@@ -498,6 +593,112 @@ test("guided replay pauses on the wrong field, corrects it, and keeps external c
   await expect(page.getByText("x402 report").locator("..")) .toContainText("pending");
 });
 
+test("frame zero prepares the final replay and anchor before requesting a proof quote", async ({ page }) => {
+  const proofRequests: string[] = [];
+  await page.addInitScript(() => {
+    const methods: string[] = [];
+    (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods = methods;
+    window.ethereum = {
+      request: async ({ method }: { method: string }) => {
+        methods.push(method);
+        throw new Error(`Wallet must not be called during proof preparation: ${method}`);
+      },
+    };
+  });
+  await mockApi(page, { live: true, anchorMode: "injective-testnet", proofRequests });
+  await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
+  await expect(page.getByLabel("Judge demo frame 0 of 15")).toBeVisible();
+
+  await page.getByTestId("open-proof-drawer").click();
+  const preflight = page.getByTestId("proof-preflight");
+  await expect(preflight).toContainText("Evidence must reach the final frame");
+  await expect(preflight).toContainText("idempotent Injective testnet anchor");
+  await expect(page.getByTestId("request-proof-report")).toHaveCount(0);
+  expect(proofRequests).toHaveLength(0);
+  expect(await page.evaluate(() => (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods)).toEqual([]);
+
+  const prepare = page.getByTestId("prepare-proof-report");
+  await prepare.click();
+  await expect(preflight).toContainText("Building the verified match tape");
+  await expect(prepare).toContainText(/Preparing frame/);
+  await expect(page.getByText("402", { exact: true })).toBeVisible({ timeout: 20_000 });
+  expect(proofRequests).toHaveLength(1);
+  expect(new URL(proofRequests[0]!).searchParams.get("eventId")).toBe("final-result");
+  await expect(page.getByText(/event has not appeared/i)).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods)).toEqual([]);
+});
+
+test("closing proof preparation cancels the quote intent before any wallet or payment request", async ({ page }) => {
+  const proofRequests: string[] = [];
+  await page.addInitScript(() => {
+    const methods: string[] = [];
+    (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods = methods;
+    window.ethereum = {
+      request: async ({ method }: { method: string }) => {
+        methods.push(method);
+        throw new Error(`Wallet must not be called during proof preparation: ${method}`);
+      },
+    };
+  });
+  await mockApi(page, {
+    live: true,
+    anchorMode: "injective-testnet",
+    proofRequests,
+  });
+  await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
+  await page.getByTestId("open-proof-drawer").click();
+  await page.getByTestId("prepare-proof-report").click();
+  await expect(page.getByTestId("prepare-proof-report")).toContainText(
+    "Preparing frame",
+  );
+
+  await page.locator(".drawer-close").click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.waitForTimeout(500);
+  expect(proofRequests).toEqual([]);
+  expect(await page.evaluate(() => (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods)).toEqual([]);
+});
+
+test("the drawer cannot disappear while a wallet authorization is awaiting confirmation", async ({ page }) => {
+  const paymentHeaders: string[] = [];
+  await mockApi(page, {
+    live: true,
+    anchorMode: "injective-testnet",
+    paymentHeaders,
+  });
+  await page.goto("/");
+  await page.getByTestId("run-conflict-replay").click();
+  await page.getByTestId("open-proof-drawer").click();
+  await prepareReplayProofQuote(page);
+  await page.evaluate(() => {
+    window.ethereum = {
+      request: async ({ method }: { method: string }) => {
+        if (method === "eth_chainId") return "0x59f";
+        if (method === "eth_requestAccounts") {
+          return ["0x3333333333333333333333333333333333333333"];
+        }
+        if (method === "eth_signTypedData_v4") {
+          return await new Promise<string>(() => undefined);
+        }
+        return null;
+      },
+    };
+  });
+
+  await page.getByTestId("submit-proof-payment").click();
+  await expect(page.getByTestId("submit-proof-payment")).toContainText(
+    "Confirm 1/2",
+  );
+  await page.locator(".drawer-close").click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(
+    "Reject the wallet prompt or wait for its receipt",
+  );
+  expect(paymentHeaders).toEqual([]);
+});
+
 test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, and links the explorer", async ({ page }) => {
   await mockApi(page, { live: true, anchorMode: "injective-testnet" });
   await page.goto("/");
@@ -505,10 +706,7 @@ test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, an
   const openProof = page.getByTestId("open-proof-drawer");
   await expect(openProof).toBeVisible();
   await openProof.click();
-  const requestProof = page.getByTestId("request-proof-report");
-  await expect(requestProof).toBeVisible();
-  await requestProof.click();
-  await expect(page.getByText("402", { exact: true })).toBeVisible();
+  await prepareReplayProofQuote(page);
   await expect(page.getByTestId("signature-sequence")).toContainText("2 signatures · 1 payment");
 
   await page.evaluate(() => {
@@ -547,9 +745,7 @@ test("wallet rejection is an error; post-signature network ambiguity is payment-
   const openProof = page.getByTestId("open-proof-drawer");
   await expect(openProof).toBeVisible();
   await openProof.click();
-  const requestProof = page.getByTestId("request-proof-report");
-  await expect(requestProof).toBeVisible();
-  await requestProof.click();
+  await prepareReplayProofQuote(page);
   const walletButton = page.getByTestId("submit-proof-payment");
   await expect(walletButton).toBeVisible();
   await expect(walletButton).toBeEnabled();
@@ -618,7 +814,7 @@ test("rejecting the second ProofPurchase signature submits no payment authorizat
   await page.goto("/");
   await page.getByTestId("run-conflict-replay").click();
   await page.getByTestId("open-proof-drawer").click();
-  await page.getByTestId("request-proof-report").click();
+  await prepareReplayProofQuote(page);
   await page.getByTestId("submit-proof-payment").click();
 
   await expect(page.getByText(/User rejected ProofPurchase binding/)).toBeVisible();

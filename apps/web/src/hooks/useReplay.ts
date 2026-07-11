@@ -20,6 +20,7 @@ export interface JudgeDemoState {
 }
 
 const FRAME_BEAT_MS = 240;
+const PROOF_PREPARE_BEAT_MS = 90;
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
@@ -183,6 +184,69 @@ export function useReplay() {
     }
   }, [setJudgePhase]);
 
+  const prepareReplayForProof = useCallback(async (eventId: string, signal?: AbortSignal): Promise<ReplaySnapshot> => {
+    const runId = judgeRun.current + 1;
+    judgeRun.current = runId;
+    setBusy("run");
+    setError(null);
+    setJudgePhase("ingesting");
+
+    try {
+      signal?.throwIfAborted();
+      let next = await api.pauseReplay(signal);
+      if (judgeRun.current !== runId) {
+        throw new Error("Evidence preparation was superseded by another replay action.");
+      }
+
+      const initialTarget = next.events.find((event) => event.eventId === eventId);
+      const initialAnchorReady = initialTarget?.anchor?.receipt.confirmed === true;
+      if (
+        next.replay.complete &&
+        (!initialTarget || (eventId === "final-result" && !initialAnchorReady))
+      ) {
+        next = await api.resetReplay(signal);
+      }
+      setSnapshot(next);
+
+      while (!next.replay.complete) {
+        signal?.throwIfAborted();
+        next = await api.stepReplay(signal);
+        if (judgeRun.current !== runId) {
+          throw new Error("Evidence preparation was superseded by another replay action.");
+        }
+        setSnapshot(next);
+        if (!next.replay.complete) await wait(PROOF_PREPARE_BEAT_MS);
+      }
+
+      const target = next.events.find((event) => event.eventId === eventId);
+      if (!target) {
+        throw new Error(`Replay completed without the requested ${eventId} event.`);
+      }
+      if (eventId === "final-result" && target.anchor?.receipt.confirmed !== true) {
+        const anchorFailure = next.errors.find(
+          (failure) =>
+            failure.frameId.toLowerCase().includes("anchor") ||
+            failure.message.toLowerCase().includes("anchor"),
+        );
+        throw new Error(
+          anchorFailure
+            ? `Injective testnet anchor failed: ${anchorFailure.message}`
+            : "Replay completed, but the final Injective testnet anchor was not confirmed.",
+        );
+      }
+
+      setJudgePhase("complete");
+      return next;
+    } catch (cause) {
+      if (judgeRun.current === runId) {
+        setJudgePhase(signal?.aborted ? "idle" : "error");
+      }
+      throw cause;
+    } finally {
+      if (judgeRun.current === runId) setBusy(null);
+    }
+  }, [setJudgePhase]);
+
   return {
     snapshot,
     integrations,
@@ -195,5 +259,6 @@ export function useReplay() {
     act,
     startJudgeDemo,
     continueJudgeDemo,
+    prepareReplayForProof,
   };
 }

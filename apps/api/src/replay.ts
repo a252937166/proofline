@@ -39,6 +39,7 @@ export class ReplayEngine {
   private lastFrame: ReplayFrame | null = null;
   private running = false;
   private applying = false;
+  private mutationTail: Promise<void> = Promise.resolve();
   private timer: NodeJS.Timeout | undefined;
   private readonly listeners = new Set<ReplayListener>();
   private readonly replayOriginMs: number;
@@ -80,6 +81,7 @@ export class ReplayEngine {
         totalFrames: this.dataset.frames.length,
         intervalMs: this.intervalMs,
         running: this.running,
+        processing: this.applying,
         complete: this.cursor >= this.dataset.frames.length,
         processedFrameIds: [...this.processedFrameIds],
         nextFrame: nextFrame ? clone(nextFrame) : null,
@@ -91,76 +93,89 @@ export class ReplayEngine {
     };
   }
 
-  reset(): ReplaySnapshot {
+  reset(): Promise<ReplaySnapshot> {
     this.stopTimer();
-    this.match = clone(this.dataset.match);
-    this.cursor = 0;
-    this.observations = [];
-    this.anchors.clear();
-    this.processedFrameIds = [];
-    this.errors = [];
-    this.lastFrame = null;
-    this.revision += 1;
-    const snapshot = this.snapshot();
-    this.emit("reset", snapshot);
-    return snapshot;
-  }
-
-  async step(): Promise<ReplaySnapshot> {
-    if (this.applying) return this.snapshot();
-    const frame = this.dataset.frames[this.cursor];
-    if (!frame) {
+    return this.enqueueMutation(() => {
+      // A queued run may have started after the eager stop above. Stop again
+      // under the mutation lock so no old timer can advance the reset state.
       this.stopTimer();
-      return this.snapshot();
-    }
-
-    this.applying = true;
-    this.cursor += 1;
-    try {
-      await this.applyFrame(frame);
-    } catch (error) {
-      this.errors.push({
-        frameId: frame.id,
-        message: error instanceof Error ? error.message : String(error),
-      });
-    } finally {
-      this.processedFrameIds.push(frame.id);
-      this.lastFrame = clone(frame);
-      if (this.cursor >= this.dataset.frames.length) this.stopTimer();
+      this.match = clone(this.dataset.match);
+      this.cursor = 0;
+      this.observations = [];
+      this.anchors.clear();
+      this.processedFrameIds = [];
+      this.errors = [];
+      this.lastFrame = null;
       this.revision += 1;
-      this.applying = false;
-    }
-
-    const snapshot = this.snapshot();
-    this.emit(
-      this.cursor >= this.dataset.frames.length ? "complete" : "frame",
-      snapshot,
-    );
-    return snapshot;
+      const snapshot = this.snapshot();
+      this.emit("reset", snapshot);
+      return snapshot;
+    });
   }
 
-  run(): ReplaySnapshot {
-    if (this.running || this.cursor >= this.dataset.frames.length) {
-      return this.snapshot();
-    }
+  step(): Promise<ReplaySnapshot> {
+    return this.enqueueMutation(async () => {
+      const frame = this.dataset.frames[this.cursor];
+      if (!frame) {
+        this.stopTimer();
+        return this.snapshot();
+      }
 
-    this.running = true;
-    this.revision += 1;
-    this.timer = setInterval(() => {
-      void this.step();
-    }, this.intervalMs);
-    const snapshot = this.snapshot();
-    this.emit("state", snapshot);
-    return snapshot;
+      this.applying = true;
+      this.cursor += 1;
+      try {
+        await this.applyFrame(frame);
+      } catch (error) {
+        this.errors.push({
+          frameId: frame.id,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        this.processedFrameIds.push(frame.id);
+        this.lastFrame = clone(frame);
+        if (this.cursor >= this.dataset.frames.length) this.stopTimer();
+        this.revision += 1;
+        this.applying = false;
+      }
+
+      const snapshot = this.snapshot();
+      this.emit(
+        this.cursor >= this.dataset.frames.length ? "complete" : "frame",
+        snapshot,
+      );
+      return snapshot;
+    });
   }
 
-  pause(): ReplaySnapshot {
-    const wasRunning = this.running;
+  run(): Promise<ReplaySnapshot> {
+    return this.enqueueMutation(() => {
+      if (this.running || this.cursor >= this.dataset.frames.length) {
+        return this.snapshot();
+      }
+
+      this.running = true;
+      this.revision += 1;
+      this.timer = setInterval(() => {
+        if (!this.applying) void this.step();
+      }, this.intervalMs);
+      const snapshot = this.snapshot();
+      this.emit("state", snapshot);
+      return snapshot;
+    });
+  }
+
+  pause(): Promise<ReplaySnapshot> {
+    const wasRunningBeforeQueue = this.running;
     this.stopTimer();
-    if (wasRunning) this.revision += 1;
-    const snapshot = this.snapshot();
-    this.emit("state", snapshot);
-    return snapshot;
+    return this.enqueueMutation(() => {
+      const wasRunningInQueue = this.running;
+      // A run queued ahead of this pause can only be observed safely here.
+      this.stopTimer();
+      if (wasRunningBeforeQueue || wasRunningInQueue) this.revision += 1;
+      const snapshot = this.snapshot();
+      this.emit("state", snapshot);
+      return snapshot;
+    });
   }
 
   dispose(): void {
@@ -317,6 +332,15 @@ export class ReplayEngine {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.running = false;
+  }
+
+  private enqueueMutation<T>(operation: () => Promise<T> | T): Promise<T> {
+    const pending = this.mutationTail.then(operation, operation);
+    this.mutationTail = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
   }
 
   private emit(event: Parameters<ReplayListener>[0], snapshot: ReplaySnapshot): void {

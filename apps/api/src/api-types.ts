@@ -40,6 +40,7 @@ export interface ReplaySnapshot {
     totalFrames: number;
     intervalMs: number;
     running: boolean;
+    processing: boolean;
     complete: boolean;
     processedFrameIds: string[];
     nextFrame: ReplayFrame | null;

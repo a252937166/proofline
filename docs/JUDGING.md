@@ -42,7 +42,11 @@ settlement. Select a data mode and inspect its machine-readable disclosure:
    contributes weight; duplicating one provider cannot manufacture quorum.
 10. Press **Inspect x402 + chain proof** and verify all three layers:
    packet integrity, EIP-712 trusted issuer, and match-wide latest on-chain
-   commitment.
+   commitment. If the drawer is opened before the final frame, press
+   **Prepare replay + testnet anchor** first. That preflight advances only the
+   disclosed evidence tape and server-funded idempotent testnet anchor; it does
+   not open a wallet or request USDC. The wallet remains a separate action
+   after the unsigned HTTP 402 terms are visible.
 11. Run the tamper check. A one-field mutation must fail integrity verification.
 
 The replay is permanently labelled **Historical Replay · Not Live**, and the

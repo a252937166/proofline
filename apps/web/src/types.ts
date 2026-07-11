@@ -154,6 +154,7 @@ export interface ReplayState {
   cursor: number;
   totalFrames: number;
   running: boolean;
+  processing: boolean;
   complete: boolean;
   nextFrame?: ReplayFrameSummary | null;
 }
