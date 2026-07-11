@@ -4,7 +4,11 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApi, type ApiRuntime } from "../src/app.js";
-import { explorerTransaction } from "../src/anchor.js";
+import {
+  DemoAnchorService,
+  explorerTransaction,
+  type AnchorService,
+} from "../src/anchor.js";
 import {
   attachProofPurchaseBinding,
   proofPurchaseMessage,
@@ -13,6 +17,56 @@ import {
 
 const MATCH_ID = "WC-2022-WAL-IRN";
 const ISSUER_PRIVATE_KEY = generatePrivateKey();
+const TESTNET_ANCHOR_PRIVATE_KEY = generatePrivateKey();
+const TESTNET_REGISTRY = "0x1111111111111111111111111111111111111111";
+const TESTNET_ANCHOR_ENV = {
+  INJECTIVE_ANCHOR_MODE: "injective-testnet",
+  INJECTIVE_PRIVATE_KEY: TESTNET_ANCHOR_PRIVATE_KEY,
+  PROOF_REGISTRY_ADDRESS: TESTNET_REGISTRY,
+};
+
+function testnetAnchorService(): AnchorService {
+  const demo = new DemoAnchorService();
+  return {
+    mode: "injective-testnet",
+    async anchor(input) {
+      const record = await demo.anchor(input);
+      return {
+        ...record,
+        simulated: false,
+        disclosure: "Test-only confirmed Injective receipt.",
+        receipt: {
+          ...record.receipt,
+          mode: "injective-testnet",
+          txHash: `0x${"a".repeat(64)}`,
+          blockNumber: "123",
+          contractAddress: TESTNET_REGISTRY,
+          explorerUrl: `https://testnet.blockscout.injective.network/tx/0x${"a".repeat(64)}`,
+        },
+      };
+    },
+    async verify() {
+      return {
+        checked: true,
+        valid: true,
+        mode: "injective-testnet",
+        reason: "Test-only registry verification.",
+      };
+    },
+    status() {
+      return {
+        mode: "injective-testnet",
+        status: "configured-unverified",
+        simulated: false,
+        chainId: 1439,
+        network: "eip155:1439",
+        publicRpcUrl: "https://k8s.testnet.json-rpc.injective.network/",
+        registryAddress: TESTNET_REGISTRY,
+        explorerUrl: "https://testnet.blockscout.injective.network",
+      };
+    },
+  };
+}
 
 describe("Proofline API", () => {
   let runtime: ApiRuntime | undefined;
@@ -23,8 +77,14 @@ describe("Proofline API", () => {
     vi.unstubAllGlobals();
   });
 
-  function boot(env: NodeJS.ProcessEnv = { NODE_ENV: "test" }): ApiRuntime {
-    runtime = createApi({ env });
+  function boot(
+    env: NodeJS.ProcessEnv = { NODE_ENV: "test" },
+    anchorService?: AnchorService,
+  ): ApiRuntime {
+    runtime = createApi({
+      env,
+      ...(anchorService ? { anchorService } : {}),
+    });
     return runtime;
   }
 
@@ -471,7 +531,7 @@ describe("Proofline API", () => {
 
     // A paid retry returns the exact packet that was quoted even if shared
     // replay state changes between negotiation and payment.
-    active.engine.reset();
+    await active.engine.reset();
 
     const paid = await request(active.app)
       .get(proofUrl)
@@ -564,12 +624,86 @@ describe("Proofline API", () => {
 
   it("checks proof existence before negotiation and fails closed for incomplete live x402", async () => {
     let active = boot();
+    const notReady = await request(active.app)
+      .get(`/api/matches/${MATCH_ID}/proof?eventId=final-result`)
+      .expect(409)
+      .expect({
+        error: "proof_event_not_ready",
+        reason: "event-not-processed",
+        message:
+          "The requested event belongs to this replay but has not been processed yet. Advance the replay before requesting its proof.",
+        paymentState: "not-requested",
+        progress: {
+          cursor: 0,
+          totalFrames: 15,
+          running: false,
+          processing: false,
+          complete: false,
+        },
+        action: {
+          method: "POST",
+          href: "/api/replay/step",
+          runHref: "/api/replay/run",
+          pollHref: "/api/replay/state",
+          anchorRequired: true,
+        },
+      });
+    expect(notReady.headers["payment-required"]).toBeUndefined();
+
     await request(active.app)
-      .get(`/api/matches/${MATCH_ID}/proof`)
+      .get(`/api/matches/${MATCH_ID}/proof?eventId=not-a-real-event`)
       .expect(404)
+      .expect({
+        error: "proof_event_not_found",
+        message: "The requested event does not exist in this replay.",
+      })
       .expect((response) => {
         expect(response.headers["payment-required"]).toBeUndefined();
       });
+
+    const firstFinalFrame = active.dataset.frames.findIndex(
+      (frame) =>
+        frame.kind === "observe" &&
+        frame.observation.eventId === "final-result",
+    );
+    for (let index = 0; index <= firstFinalFrame; index += 1) {
+      await active.engine.step();
+    }
+    const appearedButUnfinished = await request(active.app)
+      .get(`/api/matches/${MATCH_ID}/proof?eventId=final-result`)
+      .expect(409);
+    expect(appearedButUnfinished.body).toMatchObject({
+      error: "proof_event_not_ready",
+      reason: "final-anchor-pending",
+      paymentState: "not-requested",
+    });
+    expect(appearedButUnfinished.headers["payment-required"]).toBeUndefined();
+
+    while (
+      active.engine.snapshot().replay.cursor <
+      active.dataset.frames.length - 1
+    ) {
+      await active.engine.step();
+    }
+    const finishedButUnanchored = await request(active.app)
+      .get(`/api/matches/${MATCH_ID}/proof?eventId=final-result`)
+      .expect(409);
+    expect(finishedButUnanchored.body).toMatchObject({
+      error: "proof_event_not_ready",
+      reason: "final-anchor-pending",
+      progress: { cursor: 14, complete: false },
+    });
+    expect(finishedButUnanchored.headers["payment-required"]).toBeUndefined();
+
+    await active.engine.step();
+    const readyQuote = await request(active.app)
+      .get(`/api/matches/${MATCH_ID}/proof?eventId=final-result`)
+      .expect(402);
+    expect(readyQuote.body).toMatchObject({
+      code: "PROOFLINE_X402_PAYMENT_REQUIRED",
+      proofPacketHash: expect.stringMatching(/^0x[0-9a-f]{64}$/),
+    });
+    expect(readyQuote.headers["payment-required"]).toBeDefined();
 
     active.dispose();
     active = createApi({
@@ -599,18 +733,130 @@ describe("Proofline API", () => {
       });
   });
 
+  it("never quotes a final proof when the replay anchor failed", async () => {
+    const failingAnchor = new DemoAnchorService();
+    vi.spyOn(failingAnchor, "anchor").mockRejectedValue(
+      new Error("Injected anchor outage"),
+    );
+    runtime = createApi({
+      env: { NODE_ENV: "test" },
+      anchorService: failingAnchor,
+    });
+
+    await finishReplay(runtime);
+    const response = await request(runtime.app)
+      .get(`/api/matches/${MATCH_ID}/proof?eventId=final-result`)
+      .expect(409);
+    expect(response.body).toMatchObject({
+      error: "proof_event_not_ready",
+      reason: "final-anchor-failed",
+      paymentState: "not-requested",
+      progress: {
+        cursor: 15,
+        processing: false,
+        complete: true,
+      },
+      action: { method: "POST", href: "/api/replay/reset" },
+    });
+    expect(response.headers["payment-required"]).toBeUndefined();
+  });
+
+  it("does not quote while the final anchor transaction is still in flight", async () => {
+    const anchorService = new DemoAnchorService();
+    const originalAnchor = anchorService.anchor.bind(anchorService);
+    let releaseAnchor!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseAnchor = resolve;
+    });
+    vi.spyOn(anchorService, "anchor").mockImplementation(async (input) => {
+      await gate;
+      return originalAnchor(input);
+    });
+    runtime = createApi({
+      env: { NODE_ENV: "test" },
+      anchorService,
+    });
+    for (let index = 0; index < runtime.dataset.frames.length - 1; index += 1) {
+      await runtime.engine.step();
+    }
+
+    const anchoring = runtime.engine.step();
+    await vi.waitFor(() => {
+      expect(runtime?.engine.snapshot().replay.processing).toBe(true);
+    });
+    const pending = await request(runtime.app)
+      .get(`/api/matches/${MATCH_ID}/proof?eventId=final-result`)
+      .expect(409);
+    expect(pending.body).toMatchObject({
+      error: "proof_event_not_ready",
+      reason: "final-anchor-pending",
+      paymentState: "not-requested",
+      progress: { cursor: 15, processing: true, complete: true },
+    });
+    expect(pending.headers["payment-required"]).toBeUndefined();
+
+    releaseAnchor();
+    await anchoring;
+    await request(runtime.app)
+      .get(`/api/matches/${MATCH_ID}/proof?eventId=final-result`)
+      .expect(402);
+  });
+
+  it("never allows live x402 to charge for demo replay or delayed anchors", async () => {
+    const active = boot({
+      NODE_ENV: "test",
+      X402_MODE: "injective-testnet",
+      X402_PAY_TO: "0x2222222222222222222222222222222222222222",
+      X402_FACILITATOR_URL: "https://facilitator.example",
+    });
+    await finishReplay(active);
+
+    const replayProof = await request(active.app)
+      .get(`/api/matches/${MATCH_ID}/proof?eventId=final-result`)
+      .expect(503);
+    expect(replayProof.body).toEqual({
+      error: "x402_live_requires_testnet_anchor",
+      message:
+        "Live x402 payment is disabled until Injective testnet anchoring is configured. Demo commitments can only use the sandbox payment mode.",
+      paymentState: "not-requested",
+    });
+    expect(replayProof.headers["payment-required"]).toBeUndefined();
+
+    await request(active.app)
+      .post("/api/matches/WC-2026-M97-FRA-MAR/verify-anchor?eventId=final-result")
+      .expect(200)
+      .expect((response) => {
+        expect(response.body.anchor.receipt.mode).toBe("demo");
+      });
+    const delayedProof = await request(active.app)
+      .get("/api/matches/WC-2026-M97-FRA-MAR/proof?eventId=final-result")
+      .expect(503);
+    expect(delayedProof.body).toMatchObject({
+      error: "x402_live_requires_testnet_anchor",
+      paymentState: "not-requested",
+    });
+    expect(delayedProof.headers["payment-required"]).toBeUndefined();
+
+    const readiness = await request(active.app).get("/api/integrations").expect(200);
+    expect(readiness.body).toMatchObject({
+      injective: { mode: "demo", simulated: true },
+      x402: { mode: "live", status: "misconfigured", simulated: false },
+    });
+  });
+
   it("starts the official inline facilitator and quotes without touching the chain", async () => {
     const facilitatorPrivateKey = generatePrivateKey();
     const payTo = privateKeyToAccount(facilitatorPrivateKey).address;
     const active = boot({
       NODE_ENV: "test",
+      ...TESTNET_ANCHOR_ENV,
       X402_MODE: "injective-testnet",
       X402_PAY_TO: payTo,
       X402_FACILITATOR_PRIVATE_KEY: facilitatorPrivateKey,
       PUBLIC_API_URL: "https://proofline.example/api",
       // A quote-only request must not contact RPC or attempt settlement.
       INJECTIVE_TESTNET_RPC: "http://127.0.0.1:1",
-    });
+    }, testnetAnchorService());
     await finishReplay(active);
 
     const quote = await request(active.app)
@@ -723,10 +969,11 @@ describe("Proofline API", () => {
     const transaction = `0x${"6".repeat(64)}`;
     const active = boot({
       NODE_ENV: "test",
+      ...TESTNET_ANCHOR_ENV,
       X402_MODE: "injective-testnet",
       X402_PAY_TO: payTo,
       X402_FACILITATOR_URL: "https://facilitator.example",
-    });
+    }, testnetAnchorService());
     await finishReplay(active);
     const proofUrl = `/api/matches/${MATCH_ID}/proof?eventId=final-result`;
     const quote = await request(active.app).get(proofUrl).expect(402);
@@ -843,10 +1090,11 @@ describe("Proofline API", () => {
     const payer = privateKeyToAccount(payerKey).address;
     const active = boot({
       NODE_ENV: "test",
+      ...TESTNET_ANCHOR_ENV,
       X402_MODE: "injective-testnet",
       X402_PAY_TO: payTo,
       X402_FACILITATOR_URL: "https://facilitator.example",
-    });
+    }, testnetAnchorService());
     await finishReplay(active);
     const proofUrl = `/api/matches/${MATCH_ID}/proof?eventId=final-result`;
     const quote = await request(active.app).get(proofUrl).expect(402);

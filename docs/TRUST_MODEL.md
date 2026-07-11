@@ -79,6 +79,9 @@ The executed packet passed all three layers; its sanitized evidence is
   replay and 2026 delayed snapshot are never described as live.
 - Every x402 quote freezes a packet identity. Replay progress cannot swap the
   evidence after review and before payment.
+- Live x402 refuses demo commitments: both the active anchor runtime and the
+  frozen receipt must be `injective-testnet`. Demo receipts are payable only
+  through the explicitly labelled sandbox path.
 - The full frozen packet and entitlement are atomically persisted. A process
   restart cannot regenerate a different signed packet after settlement.
 - An independent ProofPurchase signature binds the packet hash to the x402

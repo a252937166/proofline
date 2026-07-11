@@ -39,8 +39,14 @@ export function integrationStatus(
     ) &&
     config.anchor.mode === "demo";
   const x402Live = config.x402.mode === "live";
+  const testnetAnchorReadyForPayment =
+    config.anchor.mode === "injective-testnet" &&
+    anchor.mode === "injective-testnet" &&
+    anchor.simulated === false;
   const x402Configured =
-    config.x402.mode === "live" ? config.x402.configured : true;
+    config.x402.mode === "live"
+      ? config.x402.configured && testnetAnchorReadyForPayment
+      : true;
 
   return {
     schema: "proofline.integrations.v1",
@@ -98,7 +104,7 @@ export function integrationStatus(
       disclosure: x402Live
         ? x402Configured
           ? "Official @injectivelabs/x402 middleware is configured for real Injective testnet USDC settlement and loads on demand."
-          : "Live x402 was requested, but X402_PAY_TO plus a facilitator URL or a valid inline key/receipt-proxy token are not configured. Requests fail closed; no demo success is substituted."
+          : "Live x402 was requested, but its payee/facilitator or the required Injective testnet anchor runtime is incomplete. Requests fail closed; no demo proof can trigger a real payment."
         : "Demo sandbox negotiates HTTP 402 without signing, transferring USDC, or creating a transaction. The response is visibly marked simulated.",
     },
     cctp: {

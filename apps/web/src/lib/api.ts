@@ -107,15 +107,15 @@ function findDemoSignature(value: unknown): string | undefined {
 }
 
 export const api = {
-  getReplayState: () => request<ReplaySnapshot>("/replay/state"),
+  getReplayState: (signal?: AbortSignal) => request<ReplaySnapshot>("/replay/state", { ...(signal ? { signal } : {}) }),
 
-  resetReplay: () => request<ReplaySnapshot>("/replay/reset", { method: "POST" }),
+  resetReplay: (signal?: AbortSignal) => request<ReplaySnapshot>("/replay/reset", { method: "POST", ...(signal ? { signal } : {}) }),
 
-  stepReplay: () => request<ReplaySnapshot>("/replay/step", { method: "POST" }),
+  stepReplay: (signal?: AbortSignal) => request<ReplaySnapshot>("/replay/step", { method: "POST", ...(signal ? { signal } : {}) }),
 
-  runReplay: () => request<ReplaySnapshot>("/replay/run", { method: "POST" }),
+  runReplay: (signal?: AbortSignal) => request<ReplaySnapshot>("/replay/run", { method: "POST", ...(signal ? { signal } : {}) }),
 
-  pauseReplay: () => request<ReplaySnapshot>("/replay/pause", { method: "POST" }),
+  pauseReplay: (signal?: AbortSignal) => request<ReplaySnapshot>("/replay/pause", { method: "POST", ...(signal ? { signal } : {}) }),
 
   getIntegrations: () => request<IntegrationsResponse>("/integrations"),
 
@@ -140,11 +140,12 @@ export const api = {
       `/matches/${encodeURIComponent(matchId)}/decision?eventId=${encodeURIComponent(eventId)}`,
     ),
 
-  async getProofQuote(matchId: string, eventId: string): Promise<PaymentQuote | ProofPacketResponse> {
+  async getProofQuote(matchId: string, eventId: string, signal?: AbortSignal): Promise<PaymentQuote | ProofPacketResponse> {
     const response = await fetch(
       `${API_BASE}/matches/${encodeURIComponent(matchId)}/proof?eventId=${encodeURIComponent(eventId)}`,
       {
         redirect: "error",
+        ...(signal ? { signal } : {}),
         headers: {
           Accept: "application/json",
           "X-Proofline-Session": PROOFLINE_SESSION_ID,
@@ -178,15 +179,16 @@ export const api = {
     return body as unknown as ProofPacketResponse;
   },
 
-  submitProofPayment: (matchId: string, eventId: string, signature: string) =>
+  submitProofPayment: (matchId: string, eventId: string, signature: string, signal?: AbortSignal) =>
     request<ProofPacketResponse>(
       `/matches/${encodeURIComponent(matchId)}/proof?eventId=${encodeURIComponent(eventId)}`,
-      { headers: { "PAYMENT-SIGNATURE": signature } },
+      { headers: { "PAYMENT-SIGNATURE": signature }, ...(signal ? { signal } : {}) },
     ),
 
-  verifyProof: (packet: ProofPacketResponse["packet"]) =>
+  verifyProof: (packet: ProofPacketResponse["packet"], signal?: AbortSignal) =>
     request<ProofVerificationResponse>("/proofs/verify", {
       method: "POST",
+      ...(signal ? { signal } : {}),
       body: JSON.stringify({ packet }),
     }),
 };

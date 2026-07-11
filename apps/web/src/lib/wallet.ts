@@ -164,7 +164,14 @@ export async function createBrowserPaymentSignature(options: {
   rpcUrl: string;
   explorerUrl: string;
   onSigningStep?: (step: BrowserSigningStep) => void;
+  isActive?: () => boolean;
 }): Promise<BrowserPayment> {
+  const assertActive = () => {
+    if (options.isActive?.() === false) {
+      throw new DOMException("The payment flow was canceled before submission.", "AbortError");
+    }
+  };
+  assertActive();
   const provider = window.ethereum;
   if (!provider) {
     throw new Error("No browser wallet was detected. Unlock MetaMask, or purchase through the Proofline MCP / Agent CLI.");
@@ -213,11 +220,13 @@ export async function createBrowserPaymentSignature(options: {
   }
 
   const accounts = await provider.request({ method: "eth_requestAccounts" });
+  assertActive();
   const account = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : null;
   if (!account || !/^0x[0-9a-fA-F]{40}$/.test(account)) {
     throw new Error("The connected wallet did not return a valid EVM account.");
   }
   await ensureInjectiveTestnet(provider, options.rpcUrl, options.explorerUrl);
+  assertActive();
 
   const now = Math.floor(Date.now() / 1000);
   const authorization = {
@@ -259,6 +268,7 @@ export async function createBrowserPaymentSignature(options: {
     method: "eth_signTypedData_v4",
     params: [account, JSON.stringify(typedData)],
   });
+  assertActive();
   if (typeof signature !== "string" || !SIGNATURE_PATTERN.test(signature)) {
     throw new Error("The wallet did not return a valid USDC authorization signature.");
   }
@@ -303,10 +313,12 @@ export async function createBrowserPaymentSignature(options: {
   };
 
   options.onSigningStep?.(2);
+  assertActive();
   const purchaseSignature = await provider.request({
     method: "eth_signTypedData_v4",
     params: [account, JSON.stringify(purchaseTypedData)],
   });
+  assertActive();
   if (
     typeof purchaseSignature !== "string" ||
     !SIGNATURE_PATTERN.test(purchaseSignature)

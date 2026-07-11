@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -31,7 +32,23 @@ import type {
   VerificationResult,
 } from "./types";
 
-type DrawerStatus = "idle" | "quoting" | "quoted" | "paying" | "uncertain" | "recovering" | "paid" | "error";
+type DrawerStatus = "idle" | "preparing" | "quoting" | "quoted" | "paying" | "uncertain" | "recovering" | "paid" | "error";
+
+interface ProofTarget {
+  matchId: string;
+  eventId: string;
+  replay: boolean;
+}
+
+interface DrawerOperation {
+  epoch: number;
+  targetKey: string;
+  controller: AbortController;
+}
+
+function isAbortError(cause: unknown): boolean {
+  return cause instanceof DOMException && cause.name === "AbortError";
+}
 
 const TESTNET_EXPLORER = "https://testnet.blockscout.injective.network";
 const CCTP_SOURCE = "Base Sepolia";
@@ -634,11 +651,13 @@ function VerificationLayers({ verification }: { verification: ProofVerificationR
   );
 }
 
-function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, onVerification }: {
+function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareReplay, onClose, onProof, onVerification }: {
   open: boolean;
   matchId: string;
   eventId: string;
+  replay: ReplaySnapshot | null;
   integrations: IntegrationsResponse | null;
+  onPrepareReplay: (eventId: string, signal?: AbortSignal) => Promise<ReplaySnapshot>;
   onClose: () => void;
   onProof: (proof: ProofPacketResponse | null) => void;
   onVerification: (verification: ProofVerificationResponse | null) => void;
@@ -656,38 +675,104 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
   // A live PAYMENT-SIGNATURE is deliberately ephemeral: it exists only in this
   // mounted drawer and is replayed for recovery without storage or logging.
   const paymentSignatureRef = useRef<string | null>(null);
+  const operationEpochRef = useRef(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const drawerActiveRef = useRef(open);
+  const onVerificationRef = useRef(onVerification);
+  const targetKey = `${matchId}:${eventId}`;
+  const targetKeyRef = useRef(targetKey);
+  drawerActiveRef.current = open;
+  onVerificationRef.current = onVerification;
+  targetKeyRef.current = targetKey;
+  const closeLocked = status === "paying" || status === "recovering" || status === "uncertain";
+
+  const isCurrentOperation = (operation: DrawerOperation): boolean =>
+    drawerActiveRef.current &&
+    !operation.controller.signal.aborted &&
+    operationEpochRef.current === operation.epoch &&
+    targetKeyRef.current === operation.targetKey;
+
+  const beginOperation = (): DrawerOperation => {
+    abortControllerRef.current?.abort();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    const epoch = operationEpochRef.current + 1;
+    operationEpochRef.current = epoch;
+    return { epoch, targetKey, controller };
+  };
+
+  const handleClose = useCallback(() => {
+    if (closeLocked) {
+      setMessage(
+        status === "uncertain"
+          ? "Keep this panel open while the existing authorization is recovered or checked. Closing now would discard the only in-memory recovery handle."
+          : "A wallet or settlement request is in progress. Reject the wallet prompt or wait for its receipt before closing this panel.",
+      );
+      return;
+    }
+    drawerActiveRef.current = false;
+    operationEpochRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    paymentSignatureRef.current = null;
+    setStatus("idle");
+    setQuote(null);
+    setProof(null);
+    setVerification(null);
+    setWalletAccount(null);
+    setPaymentNonce(null);
+    setSigningStep(null);
+    setTamperResult("idle");
+    setMessage(null);
+    onClose();
+  }, [closeLocked, onClose, status]);
 
   useEffect(() => {
     if (!open) return;
     closeButton.current?.focus();
-    const listener = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const listener = (event: KeyboardEvent) => { if (event.key === "Escape") handleClose(); };
     document.addEventListener("keydown", listener);
     document.body.classList.add("drawer-open");
     return () => {
       document.removeEventListener("keydown", listener);
       document.body.classList.remove("drawer-open");
     };
-  }, [open, onClose]);
+  }, [handleClose, open]);
 
   useEffect(() => {
+    operationEpochRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    if (!open) return;
     setStatus("idle");
     setQuote(null);
     setProof(null);
     setVerification(null);
-    onVerification(null);
+    onVerificationRef.current(null);
     setWalletAccount(null);
     setPaymentNonce(null);
     setSigningStep(null);
     paymentSignatureRef.current = null;
     setTamperResult("idle");
     setMessage(null);
-  }, [eventId]);
+  }, [eventId, matchId, open]);
 
-  const requestQuote = async () => {
+  const requestQuote = async (preparedOperation?: DrawerOperation) => {
+    const operation = preparedOperation ?? beginOperation();
+    if (!isCurrentOperation(operation)) return;
     setStatus("quoting");
     setMessage(null);
     try {
-      const response = await api.getProofQuote(matchId, eventId);
+      const response = await api.getProofQuote(
+        matchId,
+        eventId,
+        operation.controller.signal,
+      );
+      if (!isCurrentOperation(operation)) return;
       if (!("packet" in response)) {
         setQuote(response);
         setStatus("quoted");
@@ -697,13 +782,45 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
         setStatus("paid");
       }
     } catch (cause) {
+      if (isAbortError(cause) || !isCurrentOperation(operation)) return;
+      if (
+        cause instanceof ApiError &&
+        cause.body &&
+        typeof cause.body === "object" &&
+        "error" in cause.body &&
+        cause.body.error === "proof_event_not_ready"
+      ) {
+        setStatus("idle");
+        setMessage("The replay state changed before the quote was frozen. Prepare the final proof again; no wallet was opened.");
+        return;
+      }
       setMessage(cause instanceof Error ? cause.message : "Could not negotiate the proof report.");
       setStatus("error");
     }
   };
 
+  const prepareAndRequestQuote = async () => {
+    const operation = beginOperation();
+    setStatus("preparing");
+    setMessage(null);
+    try {
+      await onPrepareReplay(eventId, operation.controller.signal);
+      if (!isCurrentOperation(operation)) return;
+      await requestQuote(operation);
+    } catch (cause) {
+      if (isAbortError(cause) || !isCurrentOperation(operation)) return;
+      setStatus("idle");
+      setMessage(
+        `Evidence preparation stopped before payment. No wallet was opened. ${
+          cause instanceof Error ? cause.message : "The replay could not reach a confirmed final proof."
+        }`,
+      );
+    }
+  };
+
   const purchase = async () => {
     if (!quote) return;
+    const operation = beginOperation();
     setStatus("paying");
     setSigningStep(null);
     setMessage(null);
@@ -721,19 +838,26 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
           maximumAmount: integrations.x402.priceAtomic,
           rpcUrl: integrations.injective.publicRpcUrl,
           explorerUrl: integrations.injective.explorerUrl,
-          onSigningStep: setSigningStep,
+          onSigningStep: (step) => {
+            if (isCurrentOperation(operation)) setSigningStep(step);
+          },
+          isActive: () => isCurrentOperation(operation),
         });
+        if (!isCurrentOperation(operation)) return;
         setSigningStep(null);
         paymentSignature = browserPayment.header;
         liveAuthorizationCreated = true;
         setWalletAccount(browserPayment.account);
         setPaymentNonce(browserPayment.nonce);
       }
+      if (!isCurrentOperation(operation)) return;
       paymentSignatureRef.current = paymentSignature;
       result = await api.submitProofPayment(matchId, eventId, paymentSignature);
     } catch (cause) {
+      if (isAbortError(cause) || !isCurrentOperation(operation)) return;
       setSigningStep(null);
       if (cause instanceof ApiError && cause.status === 409) {
+        paymentSignatureRef.current = null;
         setQuote(null);
         setStatus("idle");
         setMessage(`${cause.message} Request a fresh quote before signing again.`);
@@ -750,16 +874,22 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
       return;
     }
 
+    onProof(result);
+    if (!isCurrentOperation(operation)) return;
     setProof(result);
     setSigningStep(null);
     paymentSignatureRef.current = null;
-    onProof(result);
     setStatus("paid");
     try {
-      const checked = await api.verifyProof(result.packet);
+      const checked = await api.verifyProof(
+        result.packet,
+        operation.controller.signal,
+      );
+      if (!isCurrentOperation(operation)) return;
       setVerification(checked);
       onVerification(checked);
     } catch (cause) {
+      if (isAbortError(cause) || !isCurrentOperation(operation)) return;
       setMessage(
         `Report delivered; payment will not be repeated. Packet verification can be retried safely. ${
           cause instanceof Error ? cause.message : ""
@@ -770,12 +900,18 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
 
   const retryVerification = async () => {
     if (!proof) return;
+    const operation = beginOperation();
     setMessage(null);
     try {
-      const checked = await api.verifyProof(proof.packet);
+      const checked = await api.verifyProof(
+        proof.packet,
+        operation.controller.signal,
+      );
+      if (!isCurrentOperation(operation)) return;
       setVerification(checked);
       onVerification(checked);
     } catch (cause) {
+      if (isAbortError(cause) || !isCurrentOperation(operation)) return;
       setMessage(
         `Packet verification is still unavailable; no payment was repeated. ${
           cause instanceof Error ? cause.message : ""
@@ -790,19 +926,26 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
       setMessage("The in-memory authorization is no longer available. Check the payer and facilitator before requesting any fresh quote.");
       return;
     }
+    const operation = beginOperation();
     setStatus("recovering");
     setMessage("Replaying the original in-memory PAYMENT-SIGNATURE. No wallet prompt, storage write, or new authorization is created.");
     try {
       const response = await api.submitProofPayment(matchId, eventId, existingSignature);
       paymentSignatureRef.current = null;
-      setProof(response);
       onProof(response);
+      if (!isCurrentOperation(operation)) return;
+      setProof(response);
       setStatus("paid");
       setMessage("The existing authorization delivered the report. The wallet was not asked to sign again.");
-      const checked = await api.verifyProof(response.packet);
+      const checked = await api.verifyProof(
+        response.packet,
+        operation.controller.signal,
+      );
+      if (!isCurrentOperation(operation)) return;
       setVerification(checked);
       onVerification(checked);
     } catch (cause) {
+      if (!isCurrentOperation(operation)) return;
       setStatus("uncertain");
       setMessage(`The original signature is still held only in memory, but recovery did not resolve the payment. Do not sign again. ${cause instanceof Error ? cause.message : ""}`);
     }
@@ -810,43 +953,102 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
 
   const runTamperControl = async () => {
     if (!proof) return;
+    const operation = beginOperation();
     setTamperResult("running");
     const tampered = structuredClone(proof.packet);
     tampered.eventId = `${tampered.eventId}-tampered`;
     try {
-      const checked = await api.verifyProof(tampered);
+      const checked = await api.verifyProof(
+        tampered,
+        operation.controller.signal,
+      );
+      if (!isCurrentOperation(operation)) return;
       setTamperResult(checked.valid ? "failed" : "passed");
-    } catch {
+    } catch (cause) {
+      if (isAbortError(cause) || !isCurrentOperation(operation)) return;
       setTamperResult("passed");
     }
   };
 
   if (!open) return null;
   const isSandbox = integrations?.x402.mode !== "live";
+  const livePaymentUsable = Boolean(
+    integrations?.x402.mode === "live" &&
+    integrations.x402.status !== "misconfigured" &&
+    !integrations.x402.simulated,
+  );
+  const testnetAnchorUsable = Boolean(
+    integrations?.injective.mode === "injective-testnet" &&
+    integrations.injective.status !== "misconfigured" &&
+    !integrations.injective.simulated,
+  );
+  const replayTarget = replay?.match.id === matchId;
+  const replayEvent = replayTarget
+    ? replay.events.find((record) => record.eventId === eventId)
+    : undefined;
+  const anchorRequired = replayTarget && eventId === "final-result";
+  const replayReady = !replayTarget || Boolean(
+    replay.replay.complete &&
+    !replay.replay.running &&
+    !replay.replay.processing &&
+    replayEvent &&
+    (!anchorRequired || (
+      replayEvent.anchor?.receipt.confirmed === true &&
+      (integrations?.x402.mode !== "live" ||
+        replayEvent.anchor.receipt.mode === "injective-testnet")
+    )),
+  );
+  const paymentConfigurationReady = isSandbox || livePaymentUsable;
+  const showReplayPreflight = Boolean(
+    replayTarget &&
+    (status === "preparing" || (status === "idle" && !replayReady)),
+  );
+  const replayProgress = replayTarget && replay.replay.totalFrames
+    ? Math.min(100, (replay.replay.cursor / replay.replay.totalFrames) * 100)
+    : 0;
 
   return (
     <div className="drawer-layer">
-      <button type="button" className="drawer-scrim" aria-label="Close proof report" onClick={onClose} />
+      <button type="button" className="drawer-scrim" aria-label="Close proof report" onClick={handleClose} />
       <aside className="proof-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-heading" data-drawer-status={status}>
         <header>
           <div><p className="eyebrow light">Premium verification report</p><h2 id="drawer-heading">x402 proof packet</h2></div>
-          <button ref={closeButton} type="button" className="drawer-close" onClick={onClose} aria-label="Close proof report"><Icon name="close" /></button>
+          <button ref={closeButton} type="button" className="drawer-close" onClick={handleClose} aria-label="Close proof report" data-close-locked={closeLocked}><Icon name="close" /></button>
         </header>
-        <div className="drawer-mode"><span>{isSandbox ? "SANDBOX" : "TESTNET"}</span><p>{isSandbox ? "Protocol-shaped negotiation. No value is transferred." : "A signed USDC authorization settles on Injective testnet."}</p></div>
+        <div className="drawer-mode"><span>{isSandbox ? "SANDBOX" : livePaymentUsable ? "TESTNET" : "CONFIG REQUIRED"}</span><p>{isSandbox ? "Protocol-shaped negotiation. No value is transferred." : livePaymentUsable ? "A signed USDC authorization is validated and submitted for Injective testnet settlement." : "Live x402 is not ready. Proofline will fail closed before requesting a wallet signature."}</p></div>
 
         <section className="price-ticket">
           <span>Verification packet</span><strong>{integrations?.x402.priceDisplay ?? "0.01 USDC"}</strong><small>Spend policy cap · 10,000 atomic USDC</small>
         </section>
 
         <div className="payment-flow" aria-label="x402 payment flow">
-          <span className={status !== "idle" && status !== "quoting" ? "complete" : "active"}><i>1</i><b>Request</b><small>GET proof</small></span>
+          <span className={status === "idle" || status === "preparing" || status === "quoting" ? "active" : "complete"}><i>1</i><b>Request</b><small>GET proof</small></span>
           <Icon name="arrow" />
           <span className={status === "quoted" || status === "paying" || status === "uncertain" || status === "recovering" || status === "paid" ? "active" : ""}><i>2</i><b>402 quote</b><small>Inspect terms</small></span>
           <Icon name="arrow" />
           <span className={status === "paid" ? "complete" : ""}><i>3</i><b>Report</b><small>Verify hash</small></span>
         </div>
 
-        {status === "idle" && <div className="drawer-action"><p>Request the paid route without a signature to inspect its exact price, asset, network, and payee.</p><button type="button" className="amber-button" onClick={() => void requestQuote()} data-testid="request-proof-report">Request proof report <Icon name="arrow" /></button></div>}
+        {showReplayPreflight && replay && (
+          <section className={`proof-preflight ${status === "preparing" ? "is-preparing" : ""}`} data-testid="proof-preflight" aria-live="polite">
+            <div className="preflight-head"><span>VAR evidence tape</span><strong>FRAME {String(replay.replay.cursor).padStart(2, "0")} / {String(replay.replay.totalFrames).padStart(2, "0")}</strong></div>
+            <div className="preflight-meter" aria-label={`Evidence preparation ${Math.round(replayProgress)} percent`}><span style={{ width: `${replayProgress}%` }} /></div>
+            <div className="preflight-copy">
+              <p className="eyebrow">Final proof gate</p>
+              <h3>{status === "preparing" ? "Building the verified match tape" : "Evidence must reach the final frame"}</h3>
+              <p>Proofline will process the disclosed replay, resolve the provider conflict, and {testnetAnchorUsable ? "confirm the idempotent Injective testnet anchor" : integrations?.injective.mode === "injective-testnet" ? "require a usable Injective testnet anchor configuration" : "create the disclosed deterministic demo commitment"} before requesting a frozen 402 quote.</p>
+            </div>
+            <ol className="preflight-stages">
+              <li className={replay.replay.cursor >= 5 ? "done" : status === "preparing" ? "active" : ""}><i>01</i><span><b>Ingest</b><small>Source observations</small></span></li>
+              <li className={replay.replay.cursor >= 6 ? "done" : replay.replay.cursor >= 4 ? "active" : ""}><i>02</i><span><b>Resolve</b><small>Conflict correction</small></span></li>
+              <li className={replayEvent?.anchor?.receipt.confirmed ? "done" : replay.replay.cursor >= 14 ? "active" : ""}><i>03</i><span><b>Anchor</b><small>{testnetAnchorUsable ? "Injective testnet" : integrations?.injective.mode === "injective-testnet" ? "Configuration required" : "Demo commitment"}</small></span></li>
+            </ol>
+            <p className="preflight-safety"><Icon name="wallet" size={14} /> {testnetAnchorUsable ? "This step may submit the idempotent testnet anchor." : integrations?.injective.mode === "injective-testnet" ? "This step stops unless the testnet anchor configuration is usable." : "This step creates a demo commitment only."} It never opens your wallet or transfers USDC.</p>
+            <button type="button" className="amber-button" onClick={() => void prepareAndRequestQuote()} disabled={status === "preparing"} data-testid="prepare-proof-report">{status === "preparing" ? `Preparing frame ${replay.replay.cursor}/${replay.replay.totalFrames}…` : testnetAnchorUsable ? "Prepare replay + testnet anchor" : integrations?.injective.mode === "injective-testnet" ? "Check anchor configuration" : "Prepare replay + demo commitment"}<Icon name="arrow" /></button>
+          </section>
+        )}
+        {status === "idle" && replayReady && paymentConfigurationReady && <div className="drawer-action"><p>Request the paid route without a signature to inspect its exact price, asset, network, and payee.</p><button type="button" className="amber-button" onClick={() => void requestQuote()} data-testid="request-proof-report">Request proof report <Icon name="arrow" /></button></div>}
+        {status === "idle" && replayReady && !paymentConfigurationReady && <div className="drawer-error" role="alert">Live x402 is unavailable until both the facilitator and Injective testnet anchor runtime are configured. No wallet request can start.</div>}
         {status === "quoting" && <div className="drawer-loading"><span /><p>Negotiating x402 terms…</p></div>}
 
         {quote && (
@@ -939,6 +1141,7 @@ export function App() {
     act,
     startJudgeDemo,
     continueJudgeDemo,
+    prepareReplayForProof,
   } = useReplay();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
@@ -947,9 +1150,11 @@ export function App() {
   const [catalogDetailError, setCatalogDetailError] = useState<string | null>(null);
   const [decisionResponse, setDecisionResponse] = useState<DecisionResponse | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTarget, setDrawerTarget] = useState<ProofTarget | null>(null);
   const [proof, setProof] = useState<ProofPacketResponse | null>(null);
   const [proofVerification, setProofVerification] = useState<ProofVerificationResponse | null>(null);
   const previousReplayCursor = useRef(-1);
+  const closeProofDrawer = useCallback(() => setDrawerOpen(false), []);
 
   const defaultCatalogMatchId = catalog?.matches.find((entry) => entry.dataMode === "delayed")?.id
     ?? catalog?.matches[0]?.id
@@ -1038,7 +1243,18 @@ export function App() {
   const showReplay = !selectedCatalogMatch || selectedCatalogMatch.dataMode === "historical-replay";
   const activeDataMode = selectedCatalogMatch?.dataMode ?? snapshot.mode;
   const proofMatchId = showReplay ? snapshot.match.id : selectedCatalogMatch.id;
-  const proofEventId = showReplay ? selected?.eventId ?? "final-result" : "final-result";
+  // The premium route is a settlement report, so it always binds the anchored
+  // final result. Per-event evidence remains inspectable for free in the tape.
+  const proofEventId = "final-result";
+  const openProofDrawer = () => {
+    setDrawerTarget({ matchId: proofMatchId, eventId: proofEventId, replay: showReplay });
+    setDrawerOpen(true);
+  };
+  const activeDrawerTarget = drawerTarget ?? {
+    matchId: proofMatchId,
+    eventId: proofEventId,
+    replay: showReplay,
+  };
 
   return (
     <div className="app-shell">
@@ -1078,7 +1294,7 @@ export function App() {
         chainVerified={onchainVerified}
         onStart={() => void startJudgeDemo()}
         onContinue={() => void continueJudgeDemo()}
-        onInspectProof={() => setDrawerOpen(true)}
+        onInspectProof={openProofDrawer}
       />
 
       <main id="match-sheet" className="match-sheet is-revised">
@@ -1099,7 +1315,7 @@ export function App() {
               decision={decision}
               anchor={anchor}
               onchainVerified={onchainVerified}
-              openProof={() => setDrawerOpen(true)}
+              openProof={openProofDrawer}
             />
           </article>
         </section>
@@ -1124,7 +1340,7 @@ export function App() {
             <summary><span>Injective commitment & x402 proof</span><small>{onchainVerified ? "Fresh registry lookup verified" : anchor?.receipt.mode === "demo" ? "Demo commitment · no chain transaction" : "External checks pending"}</small></summary>
             <div className="detail-grid infrastructure-detail-grid">
               <AnchorReceiptView anchor={anchor} verification={selected?.verification} integrations={integrations} />
-              <div className="proof-entry-card"><Icon name="shield" /><h3>Verify the paid packet</h3><p>Negotiate HTTP 402, inspect exact terms, then independently recompute integrity and query the registry.</p><button type="button" className="amber-button" onClick={() => setDrawerOpen(true)}>Inspect x402 + chain proof <Icon name="arrow" /></button></div>
+              <div className="proof-entry-card"><Icon name="shield" /><h3>Verify the paid packet</h3><p>Negotiate HTTP 402, inspect exact terms, then independently recompute integrity and query the registry.</p><button type="button" className="amber-button" onClick={openProofDrawer}>Inspect x402 + chain proof <Icon name="arrow" /></button></div>
             </div>
           </details>
 
@@ -1138,7 +1354,7 @@ export function App() {
             <FundingReadiness integrations={integrations} />
           </details>
         </section>
-      </main></> : selectedCatalogMatch ? <CatalogMatchView match={selectedCatalogMatch} detail={catalogDetail} loading={catalogDetailLoading} detailError={catalogDetailError} onVerifyAnchor={() => api.verifyMatchAnchor(selectedCatalogMatch.id)} onOpenProof={() => setDrawerOpen(true)} onOpenReplay={() => setSelectedMatchId(snapshot.match.id)} /> : null}
+      </main></> : selectedCatalogMatch ? <CatalogMatchView match={selectedCatalogMatch} detail={catalogDetail} loading={catalogDetailLoading} detailError={catalogDetailError} onVerifyAnchor={() => api.verifyMatchAnchor(selectedCatalogMatch.id)} onOpenProof={openProofDrawer} onOpenReplay={() => setSelectedMatchId(snapshot.match.id)} /> : null}
 
       <footer className="site-footer">
         <span>PROOFLINE / VARA ENGINE</span>
@@ -1156,10 +1372,12 @@ export function App() {
 
       <ProofDrawer
         open={drawerOpen}
-        matchId={proofMatchId}
-        eventId={proofEventId}
+        matchId={activeDrawerTarget.matchId}
+        eventId={activeDrawerTarget.eventId}
+        replay={activeDrawerTarget.replay ? snapshot : null}
         integrations={integrations}
-        onClose={() => setDrawerOpen(false)}
+        onPrepareReplay={prepareReplayForProof}
+        onClose={closeProofDrawer}
         onProof={setProof}
         onVerification={setProofVerification}
       />
