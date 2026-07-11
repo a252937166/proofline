@@ -316,7 +316,9 @@ test("guided replay pauses on the wrong field, corrects it, and keeps external c
   await expect(page.getByTestId("conflict-pause")).toContainText("card");
   await expect(page.getByText("The Agent must not settle.")).toBeVisible();
 
-  await page.getByTestId("continue-correction").click({ force: true });
+  const continueCorrection = page.getByTestId("continue-correction");
+  await expect(continueCorrection).toBeEnabled();
+  await continueCorrection.click();
   await expect(page.getByText("EVIDENCE COMPLETE")).toBeVisible();
   await expect(page.getByText("External proof pending")).toBeVisible();
   await expect(page.getByText("x402 report").locator("..")) .toContainText("pending");
@@ -345,8 +347,11 @@ test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, an
   });
   await page.getByTestId("submit-proof-payment").click();
   await expect(page.getByText("Report delivered")).toBeVisible();
-  await page.getByTestId("tamper-control").click({ force: true });
-  await expect(page.getByTestId("tamper-control")).toContainText("PASS");
+  const tamperControl = page.getByTestId("tamper-control");
+  await expect(tamperControl).toBeVisible();
+  await expect(tamperControl).toBeEnabled();
+  await tamperControl.click();
+  await expect(tamperControl).toContainText("PASS");
 });
 
 test("wallet rejection is an error; post-signature network ambiguity is payment-uncertain with recovery evidence", async ({ page }) => {
