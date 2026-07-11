@@ -607,6 +607,7 @@ describe("Proofline API", () => {
       X402_MODE: "injective-testnet",
       X402_PAY_TO: payTo,
       X402_FACILITATOR_PRIVATE_KEY: facilitatorPrivateKey,
+      PUBLIC_API_URL: "https://proofline.example/api",
       // A quote-only request must not contact RPC or attempt settlement.
       INJECTIVE_TESTNET_RPC: "http://127.0.0.1:1",
     });
@@ -619,6 +620,9 @@ describe("Proofline API", () => {
     expect(quote.headers["payment-response"]).toBeUndefined();
     expect(quote.body).toMatchObject({
       x402Version: 2,
+      resource: {
+        url: `https://proofline.example/api/matches/${MATCH_ID}/proof`,
+      },
       accepts: [
         {
           scheme: "exact",
