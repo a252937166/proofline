@@ -202,6 +202,11 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
   const env = options.env ?? process.env;
   const config = options.config ?? readRuntimeConfig(env);
   const dataset = options.dataset ?? loadReplayDataset();
+  const knownReplayEventIds = new Set<string>();
+  for (const frame of dataset.frames) {
+    if (frame.kind === "observe") knownReplayEventIds.add(frame.observation.eventId);
+    if (frame.kind === "anchor") knownReplayEventIds.add(frame.eventId);
+  }
   const scheduledMatches = options.scheduledMatches ?? loadScheduledMatches();
   const delayedSnapshot = options.delayedSnapshot ?? loadDelayedSnapshot();
   const featuredProofSample =
@@ -917,9 +922,12 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     res.json(replayFor(req).snapshot());
   });
 
-  app.post("/api/replay/reset", (req, res) => {
-    res.json(replayFor(req).reset());
-  });
+  app.post(
+    "/api/replay/reset",
+    asyncHandler(async (req, res) => {
+      res.json(await replayFor(req).reset());
+    }),
+  );
 
   app.post(
     "/api/replay/step",
@@ -928,13 +936,19 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     }),
   );
 
-  app.post("/api/replay/run", (req, res) => {
-    res.status(202).json(replayFor(req).run());
-  });
+  app.post(
+    "/api/replay/run",
+    asyncHandler(async (req, res) => {
+      res.status(202).json(await replayFor(req).run());
+    }),
+  );
 
-  app.post("/api/replay/pause", (req, res) => {
-    res.json(replayFor(req).pause());
-  });
+  app.post(
+    "/api/replay/pause",
+    asyncHandler(async (req, res) => {
+      res.json(await replayFor(req).pause());
+    }),
+  );
 
   app.get("/api/replay/stream", (req, res) => {
     const replay = replayFor(req);
@@ -1008,6 +1022,11 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     const hasPayment = Boolean(
       req.get("PAYMENT-SIGNATURE") ?? req.get("X-PAYMENT"),
     );
+    const livePaymentConfigured =
+      config.x402.mode === "live" && config.x402.configured;
+    const liveAnchorRuntimeReady =
+      config.anchor.mode === "injective-testnet" &&
+      anchorService.mode === "injective-testnet";
 
     if (hasPayment) {
       const quoteId = paymentQuoteId(req);
@@ -1035,6 +1054,17 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
         });
         return;
       }
+      if (
+        livePaymentConfigured &&
+        (!liveAnchorRuntimeReady || packet.anchor?.mode !== "injective-testnet")
+      ) {
+        res.status(409).json({
+          error: "proof_quote_anchor_mode_invalid",
+          message:
+            "The frozen quote is not backed by an Injective testnet anchor. No payment was processed; request a new quote after the anchor runtime is repaired.",
+        });
+        return;
+      }
       res.locals.packet = packet;
       res.locals.proofQuoteId = quoteId;
       res.locals.proofProvenance = isDelayedMatch
@@ -1048,6 +1078,16 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
             sourceNotice: dataset.match.sourceNotice,
           };
       next();
+      return;
+    }
+
+    if (livePaymentConfigured && !liveAnchorRuntimeReady) {
+      res.status(503).json({
+        error: "x402_live_requires_testnet_anchor",
+        message:
+          "Live x402 payment is disabled until Injective testnet anchoring is configured. Demo commitments can only use the sandbox payment mode.",
+        paymentState: "not-requested",
+      });
       return;
     }
 
@@ -1069,6 +1109,18 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
         });
         return;
       }
+      if (
+        livePaymentConfigured &&
+        delayedAnchor.receipt.mode !== "injective-testnet"
+      ) {
+        res.status(503).json({
+          error: "x402_live_requires_testnet_anchor",
+          message:
+            "Live x402 payment requires an Injective testnet proof receipt. The current delayed proof is a demo commitment, so no quote was issued.",
+          paymentState: "not-requested",
+        });
+        return;
+      }
       packet = await buildProofSubjectPacket({
         subject: delayedSubject,
         issuerPrivateKey,
@@ -1079,6 +1131,65 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
         sourceNotice: delayedSubject.match.sourceNotice,
       };
     } else {
+      const replayState = replay.snapshot();
+      const replayEvent = replayState.events.find(
+        (candidate) => candidate.eventId === eventId,
+      );
+      const anchorFailure = replayState.errors.find(
+        (failure) =>
+          failure.frameId.toLowerCase().includes("anchor") ||
+          failure.message.toLowerCase().includes("anchor"),
+      );
+      if (
+        eventId === "final-result" &&
+        !(
+          replayState.replay.complete &&
+          !replayState.replay.running &&
+          !replayState.replay.processing &&
+          replayEvent?.verification.state === "verified" &&
+          replayEvent.anchor?.receipt.confirmed === true &&
+          (!livePaymentConfigured ||
+            replayEvent.anchor.receipt.mode === "injective-testnet") &&
+          replayEvent.decision.allowed
+        )
+      ) {
+        const needsReset = Boolean(
+          anchorFailure ||
+          (!replayState.replay.processing &&
+            replayState.replay.complete &&
+            replayEvent &&
+            replayEvent.anchor?.receipt.confirmed !== true),
+        );
+        res.status(409).json({
+          error: "proof_event_not_ready",
+          reason: anchorFailure
+            ? "final-anchor-failed"
+            : replayEvent
+              ? "final-anchor-pending"
+              : "event-not-processed",
+          message: anchorFailure
+            ? `The final result cannot be quoted because its anchor failed: ${anchorFailure.message}`
+            : replayEvent
+              ? "The final result cannot be quoted until the replay is complete and its anchor is confirmed."
+              : "The requested event belongs to this replay but has not been processed yet. Advance the replay before requesting its proof.",
+          paymentState: "not-requested",
+          progress: {
+            cursor: replayState.replay.cursor,
+            totalFrames: replayState.replay.totalFrames,
+            running: replayState.replay.running,
+            processing: replayState.replay.processing,
+            complete: replayState.replay.complete,
+          },
+          action: {
+            method: "POST",
+            href: needsReset ? "/api/replay/reset" : "/api/replay/step",
+            runHref: "/api/replay/run",
+            pollHref: "/api/replay/state",
+            anchorRequired: true,
+          },
+        });
+        return;
+      }
       packet = await replay.proofPacket(eventId);
       res.locals.proofProvenance = {
         dataMode: "historical-replay",
@@ -1087,10 +1198,34 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
       };
     }
     if (!packet) {
+      if (knownReplayEventIds.has(eventId)) {
+        const progress = replay.snapshot().replay;
+        res.status(409).json({
+          error: "proof_event_not_ready",
+          message:
+            "The requested event belongs to this replay but has not been processed yet. Advance the replay before requesting its proof.",
+          paymentState: "not-requested",
+          progress: {
+            cursor: progress.cursor,
+            totalFrames: progress.totalFrames,
+            running: progress.running,
+            processing: progress.processing,
+            complete: progress.complete,
+          },
+          action: {
+            method: "POST",
+            href: "/api/replay/step",
+            runHref: "/api/replay/run",
+            pollHref: "/api/replay/state",
+            anchorRequired: eventId === "final-result",
+          },
+        });
+        return;
+      }
       res.status(404).json({
         error: "proof_event_not_found",
         message:
-          "The event has not appeared in the replay yet. Step or run the replay before requesting its proof.",
+          "The requested event does not exist in this replay.",
       });
       return;
     }
