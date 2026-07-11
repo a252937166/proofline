@@ -325,8 +325,12 @@ test("guided replay pauses on the wrong field, corrects it, and keeps external c
 test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, and links the explorer", async ({ page }) => {
   await mockApi(page, { live: true, anchorMode: "injective-testnet" });
   await page.goto("/");
-  await page.getByRole("button", { name: /Inspect x402 \+ chain proof/i }).first().click({ force: true });
-  await page.getByRole("button", { name: "Request proof report" }).click({ force: true });
+  const openProof = page.getByTestId("open-proof-drawer");
+  await expect(openProof).toBeVisible();
+  await openProof.click();
+  const requestProof = page.getByTestId("request-proof-report");
+  await expect(requestProof).toBeVisible();
+  await requestProof.click();
   await expect(page.getByText("402", { exact: true })).toBeVisible();
 
   await page.evaluate(() => {
@@ -339,7 +343,7 @@ test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, an
       },
     };
   });
-  await page.getByRole("button", { name: /Connect wallet & sign test USDC/i }).click({ force: true });
+  await page.getByTestId("submit-proof-payment").click();
   await expect(page.getByText("Report delivered")).toBeVisible();
   await page.getByTestId("tamper-control").click({ force: true });
   await expect(page.getByTestId("tamper-control")).toContainText("PASS");
@@ -357,9 +361,13 @@ test("wallet rejection is an error; post-signature network ambiguity is payment-
     };
   });
   await page.goto("/");
-  await page.getByRole("button", { name: /Inspect x402 \+ chain proof/i }).first().click({ force: true });
-  await page.getByRole("button", { name: "Request proof report" }).click({ force: true });
-  const walletButton = page.getByRole("button", { name: /Connect wallet/i });
+  const openProof = page.getByTestId("open-proof-drawer");
+  await expect(openProof).toBeVisible();
+  await openProof.click();
+  const requestProof = page.getByTestId("request-proof-report");
+  await expect(requestProof).toBeVisible();
+  await requestProof.click();
+  const walletButton = page.getByTestId("submit-proof-payment");
   await expect(walletButton).toBeVisible();
   await expect(walletButton).toBeEnabled();
   // Do not force-click a control that is still moving into the drawer. A
