@@ -1,5 +1,4 @@
 import {
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -8,14 +7,19 @@ import {
   type ReactNode,
 } from "react";
 
+import { JudgeDemo } from "./components/JudgeDemo";
+import { CatalogMatchView, MatchCatalogBar } from "./components/MatchCatalog";
+import { useReplay, type ReplayAction } from "./hooks/useReplay";
 import { api, ApiError } from "./lib/api";
 import { createBrowserPaymentSignature } from "./lib/wallet";
 import type {
   AnchorRecord,
+  CatalogMatchDetail,
   DecisionResponse,
   EventPayload,
   EventRecord,
   IntegrationsResponse,
+  McpRuntimeResponse,
   PaymentQuote,
   ProofPacketResponse,
   ProofVerificationResponse,
@@ -24,12 +28,13 @@ import type {
   VerificationResult,
 } from "./types";
 
-type ReplayAction = "reset" | "step" | "run" | "pause";
-type DrawerStatus = "idle" | "quoting" | "quoted" | "paying" | "paid" | "error";
+type DrawerStatus = "idle" | "quoting" | "quoted" | "paying" | "uncertain" | "recovering" | "paid" | "error";
 
 const TESTNET_EXPLORER = "https://testnet.blockscout.injective.network";
 const CCTP_SOURCE = "Base Sepolia";
 const CCTP_DESTINATION = "Injective EVM testnet";
+const BUILD_COMMIT = (import.meta.env.VITE_BUILD_COMMIT as string | undefined)?.trim() || "local-worktree";
+const RELEASE_ID = (import.meta.env.VITE_RELEASE_ID as string | undefined)?.trim() || `dev-${BUILD_COMMIT.slice(0, 10)}`;
 
 function Icon({ name, size = 18 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
@@ -72,6 +77,10 @@ function truncate(value: string | undefined, start = 8, end = 6): string {
 
 function percent(bps: number | undefined): string {
   return `${((bps ?? 0) / 100).toFixed(1)}%`;
+}
+
+function evidenceScore(bps: number | undefined): string {
+  return `${((bps ?? 0) / 100).toFixed(1)}/100`;
 }
 
 function minuteLabel(payload?: EventPayload): string {
@@ -147,68 +156,11 @@ function fallbackDecision(
   };
 }
 
-function useReplay() {
-  const [snapshot, setSnapshot] = useState<ReplaySnapshot | null>(null);
-  const [integrations, setIntegrations] = useState<IntegrationsResponse | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<ReplayAction | null>(null);
-  const forcedUi = new URLSearchParams(window.location.search).get("ui");
-
-  const load = useCallback(async () => {
-    if (forcedUi === "loading") return;
-    if (forcedUi === "error") {
-      setError("Seeded judge-path error: the replay service did not answer.");
-      return;
-    }
-    setError(null);
-    try {
-      const [nextSnapshot, nextIntegrations] = await Promise.all([
-        api.getReplayState(),
-        api.getIntegrations(),
-      ]);
-      setSnapshot(nextSnapshot);
-      setIntegrations(nextIntegrations);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The replay service did not answer.");
-    }
-  }, [forcedUi]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
-    if (!snapshot?.replay.running) return;
-    const interval = window.setInterval(() => {
-      void api.getReplayState().then(setSnapshot).catch((cause: unknown) => {
-        setError(cause instanceof Error ? cause.message : "Replay polling stopped.");
-      });
-    }, 450);
-    return () => window.clearInterval(interval);
-  }, [snapshot?.replay.running]);
-
-  const act = useCallback(async (action: ReplayAction) => {
-    setBusy(action);
-    setError(null);
-    try {
-      const next = await {
-        reset: api.resetReplay,
-        step: api.stepReplay,
-        run: api.runReplay,
-        pause: api.pauseReplay,
-      }[action]();
-      setSnapshot(next);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : `Could not ${action} the replay.`);
-    } finally {
-      setBusy(null);
-    }
-  }, []);
-
-  return { snapshot, integrations, error, busy, load, act };
-}
-
-function AppHeader({ integrations }: { integrations: IntegrationsResponse | null }) {
+function AppHeader({ integrations, mode = "replay", mcpRuntime = null }: {
+  integrations: IntegrationsResponse | null;
+  mode?: string;
+  mcpRuntime?: McpRuntimeResponse | null;
+}) {
   const chain = !integrations
     ? { label: "checking", tone: "checking" }
     : integrations.injective.mode === "demo"
@@ -227,19 +179,20 @@ function AppHeader({ integrations }: { integrations: IntegrationsResponse | null
   return (
     <header className="topbar">
       <a href="#match-sheet" className="wordmark" aria-label="Proofline home">
+        <img src="/favicon.svg" alt="" width="28" height="28" />
         <span>PROOF</span><i /><span>LINE</span>
       </a>
-      <div className="mode-lockup" aria-label="Replay disclosure">
+      <div className="mode-lockup" aria-label="Data mode" data-mode={mode}>
         <span className="mode-pulse" />
         <div>
-          <strong>Historical replay</strong>
-          <small>Recorded evidence · not live</small>
+          <strong>{mode.includes("replay") ? "Historical replay" : mode === "live" ? "Live evidence" : mode === "scheduled" ? "Scheduled evidence" : "Delayed evidence"}</strong>
+          <small>{mode.includes("replay") ? "Recorded evidence · not live" : mode === "live" ? "Provider data · live" : mode === "scheduled" ? "Fixture only · no score" : "Provider data · delayed"}</small>
         </div>
       </div>
       <div className="integration-strip" aria-label="Integration modes">
         <span><i className={chain.tone} />Injective {chain.label}</span>
         <span><i className={x402.tone} />x402 {x402.label}</span>
-        <span><i className="ready" />Agent-ready</span>
+        <span><i className={mcpRuntime?.agentReady ? "ready" : mcpRuntime?.health === "stale" ? "configured" : "demo"} />Agent {mcpRuntime?.agentReady ? "ready" : mcpRuntime?.health === "stale" ? "stale" : "offline"}</span>
       </div>
     </header>
   );
@@ -409,18 +362,19 @@ function Proofline({ record }: { record: EventRecord | undefined }) {
           <h2 id="proof-heading" key={`title-${motionKey}`}><span>{minuteLabel(payload)}</span>{eventTitle(payload)}</h2>
         </div>
         <div className="confidence-number">
-          <strong key={`confidence-${motionKey}`}>{percent(verification?.confidenceBps)}</strong>
+          <small>Evidence score</small>
+          <strong key={`confidence-${motionKey}`}>{evidenceScore(verification?.confidenceBps)}</strong>
           <span>{verificationStatus(verification)}</span>
         </div>
       </div>
 
       <div className="proofline-wrap">
-        <div className="proofline-labels"><span>Observed</span><span>Settlement threshold {threshold.toFixed(0)}%</span><span>Verified</span></div>
+        <div className="proofline-labels"><span>Observed</span><span>Policy threshold {threshold.toFixed(0)}/100</span><span>Verified</span></div>
         <div
           key={`track-${motionKey}`}
           className={`proofline-track ${contested ? "is-contested" : ""} ${cleared ? "is-cleared" : ""}`}
           role="meter"
-          aria-label="Event confidence"
+          aria-label="Event evidence score"
           aria-valuemin={0}
           aria-valuemax={100}
           aria-valuenow={confidence}
@@ -442,42 +396,48 @@ function Proofline({ record }: { record: EventRecord | undefined }) {
         <p>{contested ? "A material source conflict is active. VARA quarantines settlement while independent corroboration is still missing." : verification?.reasons[0] ?? "No canonical event exists yet. Source observations stay separate until replay begins."}</p>
       </div>
 
-      <div className="breakdown" aria-label="Confidence calculation">
-        {([
-          ["Source reliability", verification?.breakdown.reliabilityBps ?? 0],
-          ["Independent quorum", verification?.breakdown.quorumBps ?? 0],
-          ["Agreement", verification?.breakdown.agreementBps ?? 0],
-          ["Freshness", verification?.breakdown.freshnessBps ?? 0],
-        ] as const).map(([label, value]) => (
-          <div key={label}><span>{label}</span><i><b style={{ width: `${value / 100}%` }} /></i><strong>{percent(value)}</strong></div>
-        ))}
-        <div className={verification?.breakdown.conflictPenaltyBps ? "penalty active" : "penalty"}>
-          <span>Conflict penalty</span><i><b style={{ width: `${(verification?.breakdown.conflictPenaltyBps ?? 0) / 30}%` }} /></i><strong>−{percent(verification?.breakdown.conflictPenaltyBps)}</strong>
+      <details className="score-details">
+        <summary>Why this score?</summary>
+        <div className="breakdown" aria-label="Evidence score calculation">
+          {([
+            ["Source reliability", verification?.breakdown.reliabilityBps ?? 0],
+            ["Independent quorum", verification?.breakdown.quorumBps ?? 0],
+            ["Agreement", verification?.breakdown.agreementBps ?? 0],
+            ["Freshness", verification?.breakdown.freshnessBps ?? 0],
+          ] as const).map(([label, value]) => (
+            <div key={label}><span>{label}</span><i><b style={{ width: `${value / 100}%` }} /></i><strong>{percent(value)}</strong></div>
+          ))}
+          <div className={verification?.breakdown.conflictPenaltyBps ? "penalty active" : "penalty"}>
+            <span>Conflict penalty</span><i><b style={{ width: `${(verification?.breakdown.conflictPenaltyBps ?? 0) / 30}%` }} /></i><strong>−{percent(verification?.breakdown.conflictPenaltyBps)}</strong>
+          </div>
         </div>
-      </div>
 
-      {verification?.canonical.eventHash && (
-        <div className="canonical-hash"><span>Canonical event hash</span><code>{verification.canonical.eventHash}</code></div>
-      )}
+        {verification?.canonical.eventHash && (
+          <div className="canonical-hash"><span>Canonical event hash</span><code>{verification.canonical.eventHash}</code></div>
+        )}
+      </details>
     </section>
   );
 }
 
-function SettlementGate({ decision, anchor, openProof }: {
+function SettlementGate({ decision, anchor, onchainVerified, openProof }: {
   decision: SettlementDecision;
   anchor: AnchorRecord | null | undefined;
+  onchainVerified: boolean;
   openProof: () => void;
 }) {
+  const safeToSettle = decision.allowed && onchainVerified;
+  const policyOnly = decision.allowed && !onchainVerified;
   return (
-    <section className={`settlement-gate ${decision.allowed ? "is-open" : "is-held"}`} aria-labelledby="gate-heading" aria-live="polite">
+    <section className={`settlement-gate ${safeToSettle ? "is-open" : "is-held"}`} aria-labelledby="gate-heading" aria-live="polite">
       <div className="gate-signal"><span /><span /><span /></div>
       <div className="gate-copy">
-        <p className="eyebrow">Settlement gate</p>
-        <h2 id="gate-heading">{decision.allowed ? "Evidence cleared" : "Settlement held"}</h2>
-        <p>{decision.reasons[0]}</p>
+        <p className="eyebrow">Question 03 · Can the Agent settle?</p>
+        <h2 id="gate-heading">{safeToSettle ? "Safe to settle" : policyOnly ? "External proof pending" : "Settlement held"}</h2>
+        <p>{safeToSettle ? "Evidence, paid packet, and a fresh Injective registry lookup all passed." : policyOnly ? "Evidence policy cleared, but the paid packet and fresh registry check are not complete." : decision.reasons[0]}</p>
       </div>
-      <div className="gate-status"><span>{decision.allowed ? "OPEN" : "HELD"}</span><small>{anchor?.receipt.confirmed ? "Anchor matched" : "Anchor required"}</small></div>
-      <button type="button" className="proof-button" onClick={openProof}>Inspect x402 proof <Icon name="arrow" /></button>
+      <div className="gate-status"><span>{safeToSettle ? "OPEN" : policyOnly ? "PENDING" : "HELD"}</span><small>{onchainVerified ? "Registry verified" : anchor?.receipt.mode === "demo" ? "Demo commitment only" : anchor?.receipt.confirmed ? "Fresh lookup required" : "Anchor required"}</small></div>
+      <button type="button" className="proof-button" onClick={openProof} data-testid="open-proof-drawer">Inspect x402 + chain proof <Icon name="arrow" /></button>
     </section>
   );
 }
@@ -539,11 +499,11 @@ function AnchorReceiptView({ anchor, verification, integrations }: {
       </div>
       {receipt?.confirmed ? (
         <>
-          <div className="receipt-status"><Icon name="check" /><div><strong>Hash anchored</strong><span>{receipt.mode === "demo" ? "Deterministic demo receipt" : "Injective EVM testnet"}</span></div></div>
+          <div className="receipt-status"><Icon name="check" /><div><strong>{receipt.mode === "demo" ? "Deterministic demo commitment created" : "Hash anchored on Injective"}</strong><span>{receipt.mode === "demo" ? "No blockchain transaction" : "Injective EVM testnet"}</span></div></div>
           <dl>
             <div><dt>Event hash</dt><dd><code>{truncate(receipt.eventHash, 10, 8)}</code></dd></div>
-            <div><dt>Confidence</dt><dd>{percent(receipt.confidenceBps)}</dd></div>
-            <div><dt>Transaction</dt><dd><code>{truncate(receipt.txHash)}</code></dd></div>
+            <div><dt>Evidence score</dt><dd>{evidenceScore(receipt.confidenceBps)}</dd></div>
+            <div><dt>Transaction</dt><dd><code>{receipt.mode === "demo" ? "None" : truncate(receipt.txHash)}</code></dd></div>
             <div><dt>Mode</dt><dd>{receipt.mode}</dd></div>
           </dl>
           {receipt.explorerUrl ? <a className="receipt-link" href={receipt.explorerUrl} target="_blank" rel="noreferrer">Open testnet explorer <Icon name="external" size={14} /></a> : <p className="receipt-disclosure">{anchor?.disclosure}</p>}
@@ -552,7 +512,7 @@ function AnchorReceiptView({ anchor, verification, integrations }: {
         <div className="await-anchor">
           <span><Icon name="shield" /></span>
           <strong>{verification?.state === "verified" ? "Ready when the final result clears" : "Waiting for verified final result"}</strong>
-          <p>{chainMode === "demo" ? "Replay mode will issue a clearly labelled deterministic receipt." : "The hash will be written to Injective EVM testnet."}</p>
+          <p>{chainMode === "demo" ? "Replay mode creates a deterministic commitment without claiming a chain transaction." : "The hash will be written to Injective EVM testnet."}</p>
         </div>
       )}
     </section>
@@ -564,22 +524,23 @@ function FundingReadiness({ integrations }: { integrations: IntegrationsResponse
   const executable = cctp?.executable === true;
   return (
     <section className="funding-rail" aria-labelledby="funding-heading">
-      <div className="funding-title"><span><Icon name="wallet" /></span><div><p className="eyebrow">CCTP funding readiness</p><h2 id="funding-heading">USDC top-up rail</h2></div></div>
+      <div className="funding-title"><span><Icon name="wallet" /></span><div><p className="eyebrow">Future capability · not in judge path</p><h2 id="funding-heading">CCTP USDC top-up</h2></div></div>
       <div className="funding-route" aria-label={`${CCTP_SOURCE} to ${CCTP_DESTINATION}`}>
         <span><small>Source</small>{cctp?.source ?? CCTP_SOURCE}</span><i><Icon name="arrow" /></i><span><small>Domain 29</small>{cctp?.destination ?? CCTP_DESTINATION}</span>
       </div>
-      <div className={`funding-state ${executable ? "ready" : "staged"}`}><span />{executable ? "Funding path ready" : "Plan only · no burn or mint execution"}</div>
+      <div className={`funding-state ${executable ? "ready" : "staged"}`}><span />{executable ? "Integration route configured" : "Future work · no burn or mint execution"}</div>
       <p>{cctp?.disclosure ?? "PLAN ONLY · CCTP is not executed by this build. The Agent can prepare and validate a route, then must stop before burn."}</p>
     </section>
   );
 }
 
-function AgentTrace({ snapshot, record, proof, decision, proofVerification }: {
+function AgentTrace({ snapshot, record, proof, decision, proofVerification, runtime }: {
   snapshot: ReplaySnapshot;
   record: EventRecord | undefined;
   proof: ProofPacketResponse | null;
   decision: SettlementDecision;
   proofVerification: ProofVerificationResponse | null;
+  runtime: McpRuntimeResponse | null;
 }) {
   const verification = record?.verification;
   const onchainAttempted = proofVerification?.onchain.checked === true;
@@ -598,22 +559,37 @@ function AgentTrace({ snapshot, record, proof, decision, proofVerification }: {
   const conclusionReady = decision.allowed && onchainChecked;
   const steps = [
     { tool: "list_matches", detail: "Locate recorded World Cup match", state: "done" },
-    { tool: "get_live_events", detail: snapshot.replay.cursor ? `${snapshot.replay.cursor} replay frames ingested` : "Await first replay frame", state: snapshot.replay.cursor ? "done" : "wait" },
-    { tool: "verify_event", detail: verification ? `${verificationStatus(verification)} · ${percent(verification.confidenceBps)}` : "No event selected", state: verification?.conflicts.length || verification?.state === "contested" ? "held" : verification ? "done" : "wait" },
+    { tool: "get_match_events", detail: snapshot.replay.cursor ? `${snapshot.replay.cursor} replay frames ingested` : "Await first replay frame", state: snapshot.replay.cursor ? "done" : "wait" },
+    { tool: "verify_event", detail: verification ? `${verificationStatus(verification)} · score ${evidenceScore(verification.confidenceBps)}` : "No event selected", state: verification?.conflicts.length || verification?.state === "contested" ? "held" : verification ? "done" : "wait" },
     { tool: "purchase_match_proof", detail: proof ? "x402 report received" : "Spend cap: 0.01 test USDC", state: proof ? "done" : "wait" },
     { tool: "verify_onchain_anchor", detail: anchorDetail, state: onchainChecked ? "done" : onchainAttempted ? "held" : "wait" },
     { tool: "return_evidence", detail: conclusionReady ? "Settlement-safe chain conclusion" : decision.allowed ? "Integrity cleared · chain conclusion withheld" : "Policy refuses final settlement", state: conclusionReady ? "done" : decision.allowed ? "wait" : "held" },
   ];
+  const runtimeLogs = runtime?.logs ?? [];
+  const hasRuntimeEvidence = runtimeLogs.length > 0;
 
   return (
     <section className="agent-trace" aria-labelledby="agent-heading">
       <div className="agent-prompt">
         <span><Icon name="agent" /></span>
-        <div><p className="eyebrow light">Judge agent · policy trace</p><h2 id="agent-heading">“Is the final score safe to settle?”</h2></div>
+        <div><p className="eyebrow light">{hasRuntimeEvidence ? "MCP runtime evidence · actual tool handlers" : "Illustrative Agent Policy Trace · not a runtime log"}</p><h2 id="agent-heading">“Is the final score safe to settle?”</h2></div>
+        <div className={`runtime-health health-${runtime?.health ?? "never-seen"}`}><span />{runtime?.agentReady ? "AGENT-READY" : runtime?.health === "stale" ? "RUNTIME STALE" : "RUNTIME OFFLINE"}</div>
       </div>
       <ol>
-        {steps.map((step, index) => <li key={step.tool} className={`trace-${step.state}`} style={{ "--trace-index": index } as CSSProperties}><span>{String(index + 1).padStart(2, "0")}</span><div><code>{step.tool}</code><small>{step.detail}</small></div><i>{step.state === "done" ? "PASS" : step.state === "held" ? "HOLD" : "WAIT"}</i></li>)}
+        {hasRuntimeEvidence
+          ? runtimeLogs.slice(0, 8).map((entry, index) => (
+              <li key={entry.id} className={`trace-${entry.outcome === "success" ? "done" : "held"}`} style={{ "--trace-index": index } as CSSProperties}>
+                <span>{String(index + 1).padStart(2, "0")}</span>
+                <div>
+                  <code>{entry.tool}</code>
+                  <small><b>{JSON.stringify(entry.inputSummary)}</b>{entry.resultSummary} · {entry.durationMs}ms · {new Date(entry.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</small>
+                </div>
+                <i>{entry.outcome === "success" ? "PASS" : "FAIL"}</i>
+              </li>
+            ))
+          : steps.map((step, index) => <li key={step.tool} className={`trace-${step.state}`} style={{ "--trace-index": index } as CSSProperties}><span>{String(index + 1).padStart(2, "0")}</span><div><code>{step.tool}</code><small>{step.detail}</small></div><i>{step.state === "done" ? "PASS" : step.state === "held" ? "HOLD" : "WAIT"}</i></li>)}
       </ol>
+      <p className="runtime-disclosure">{runtime?.disclosure ?? "MCP runtime health is unavailable; this trace remains explicitly illustrative."}</p>
     </section>
   );
 }
@@ -627,6 +603,32 @@ function getQuoteDetail(quote: PaymentQuote | null, key: string): string | undef
     if (typeof value === "string" || typeof value === "number") return String(value);
   }
   return undefined;
+}
+
+function VerificationLayers({ verification }: { verification: ProofVerificationResponse | null }) {
+  const integrity = verification?.integrity?.valid;
+  const signature = verification?.signature?.valid;
+  const onchain = verification?.onchain;
+  const statusClass = (value: boolean | undefined) => value === true ? "layer-pass" : value === false ? "layer-fail" : "layer-pending";
+  return (
+    <div className="verification-layers" aria-label="Independent proof verification layers">
+      <div className={statusClass(integrity)}>
+        <span>01 · Integrity</span>
+        <strong>{integrity === true ? "PASS" : integrity === false ? "FAIL" : "PENDING"}</strong>
+        <p>{integrity === true ? "Packet and evidence hashes recomputed." : integrity === false ? "Deterministic recomputation did not match." : "Packet has not been recomputed yet."}</p>
+      </div>
+      <div className={statusClass(signature)}>
+        <span>02 · Issuer signature</span>
+        <strong>{signature === true ? "PASS" : signature === false ? "FAIL" : "PENDING"}</strong>
+        <p>{signature === true ? "EIP-712 signer is cryptographic and trusted." : signature === false ? verification?.signature?.detail ?? "Issuer signature did not validate." : "Issuer signature has not been checked yet."}</p>
+      </div>
+      <div className={onchain?.checked ? statusClass(onchain.valid) : "layer-pending"}>
+        <span>03 · On-chain commitment</span>
+        <strong>{onchain?.checked ? onchain.valid ? "PASS" : "FAIL" : "PENDING"}</strong>
+        <p>{onchain?.checked ? onchain.reason : "Fresh Injective registry lookup has not run."}</p>
+      </div>
+    </div>
+  );
 }
 
 function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, onVerification }: {
@@ -643,8 +645,13 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
   const [proof, setProof] = useState<ProofPacketResponse | null>(null);
   const [verification, setVerification] = useState<ProofVerificationResponse | null>(null);
   const [walletAccount, setWalletAccount] = useState<string | null>(null);
+  const [paymentNonce, setPaymentNonce] = useState<string | null>(null);
+  const [tamperResult, setTamperResult] = useState<"idle" | "running" | "passed" | "failed">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  // A live PAYMENT-SIGNATURE is deliberately ephemeral: it exists only in this
+  // mounted drawer and is replayed for recovery without storage or logging.
+  const paymentSignatureRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -665,6 +672,9 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
     setVerification(null);
     onVerification(null);
     setWalletAccount(null);
+    setPaymentNonce(null);
+    paymentSignatureRef.current = null;
+    setTamperResult("idle");
     setMessage(null);
   }, [eventId]);
 
@@ -708,7 +718,9 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
         paymentSignature = browserPayment.header;
         liveAuthorizationCreated = true;
         setWalletAccount(browserPayment.account);
+        setPaymentNonce(browserPayment.nonce);
       }
+      paymentSignatureRef.current = paymentSignature;
       result = await api.submitProofPayment(matchId, eventId, paymentSignature);
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 409) {
@@ -724,11 +736,12 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
             ? cause.message
             : "The proof payment could not finish.",
       );
-      setStatus(liveAuthorizationCreated ? "paid" : "error");
+      setStatus(liveAuthorizationCreated ? "uncertain" : "error");
       return;
     }
 
     setProof(result);
+    paymentSignatureRef.current = null;
     onProof(result);
     setStatus("paid");
     try {
@@ -760,6 +773,43 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
     }
   };
 
+  const recoverPayment = async () => {
+    const existingSignature = paymentSignatureRef.current;
+    if (!existingSignature) {
+      setMessage("The in-memory authorization is no longer available. Check the payer and facilitator before requesting any fresh quote.");
+      return;
+    }
+    setStatus("recovering");
+    setMessage("Replaying the original in-memory PAYMENT-SIGNATURE. No wallet prompt, storage write, or new authorization is created.");
+    try {
+      const response = await api.submitProofPayment(matchId, eventId, existingSignature);
+      paymentSignatureRef.current = null;
+      setProof(response);
+      onProof(response);
+      setStatus("paid");
+      setMessage("The existing authorization delivered the report. The wallet was not asked to sign again.");
+      const checked = await api.verifyProof(response.packet);
+      setVerification(checked);
+      onVerification(checked);
+    } catch (cause) {
+      setStatus("uncertain");
+      setMessage(`The original signature is still held only in memory, but recovery did not resolve the payment. Do not sign again. ${cause instanceof Error ? cause.message : ""}`);
+    }
+  };
+
+  const runTamperControl = async () => {
+    if (!proof) return;
+    setTamperResult("running");
+    const tampered = structuredClone(proof.packet);
+    tampered.eventId = `${tampered.eventId}-tampered`;
+    try {
+      const checked = await api.verifyProof(tampered);
+      setTamperResult(checked.valid ? "failed" : "passed");
+    } catch {
+      setTamperResult("passed");
+    }
+  };
+
   if (!open) return null;
   const isSandbox = integrations?.x402.mode !== "live";
 
@@ -780,12 +830,12 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
         <div className="payment-flow" aria-label="x402 payment flow">
           <span className={status !== "idle" && status !== "quoting" ? "complete" : "active"}><i>1</i><b>Request</b><small>GET proof</small></span>
           <Icon name="arrow" />
-          <span className={status === "quoted" || status === "paying" || status === "paid" ? "active" : ""}><i>2</i><b>402 quote</b><small>Inspect terms</small></span>
+          <span className={status === "quoted" || status === "paying" || status === "uncertain" || status === "recovering" || status === "paid" ? "active" : ""}><i>2</i><b>402 quote</b><small>Inspect terms</small></span>
           <Icon name="arrow" />
           <span className={status === "paid" ? "complete" : ""}><i>3</i><b>Report</b><small>Verify hash</small></span>
         </div>
 
-        {status === "idle" && <div className="drawer-action"><p>Request the paid route without a signature to inspect its exact price, asset, network, and payee.</p><button type="button" className="amber-button" onClick={() => void requestQuote()}>Request proof report <Icon name="arrow" /></button></div>}
+        {status === "idle" && <div className="drawer-action"><p>Request the paid route without a signature to inspect its exact price, asset, network, and payee.</p><button type="button" className="amber-button" onClick={() => void requestQuote()} data-testid="request-proof-report">Request proof report <Icon name="arrow" /></button></div>}
         {status === "quoting" && <div className="drawer-loading"><span /><p>Negotiating x402 terms…</p></div>}
 
         {quote && (
@@ -798,7 +848,21 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
               <div><dt>Pay to</dt><dd><code>{truncate(getQuoteDetail(quote, "payTo"), 9, 7)}</code></dd></div>
               <div><dt>Header</dt><dd><code>PAYMENT-SIGNATURE</code></dd></div>
             </dl>
-            {status !== "paid" && <button type="button" className="amber-button" onClick={() => void purchase()} disabled={status === "paying"}>{status === "paying" ? (isSandbox ? "Settling sandbox receipt…" : "Waiting for wallet signature…") : isSandbox ? "Run sandbox settlement" : "Connect wallet & sign test USDC"}<Icon name="arrow" /></button>}
+            {(status === "quoted" || status === "paying" || status === "error") && <button type="button" className="amber-button" onClick={() => void purchase()} disabled={status === "paying"} data-testid="submit-proof-payment">{status === "paying" ? (isSandbox ? "Settling sandbox receipt…" : "Waiting for wallet signature…") : isSandbox ? "Run sandbox settlement" : "Connect wallet & sign test USDC"}<Icon name="arrow" /></button>}
+          </section>
+        )}
+
+        {(status === "uncertain" || status === "recovering") && (
+          <section className="payment-uncertain" role="alert" data-testid="payment-uncertain">
+            <p className="eyebrow">Payment uncertain · do not sign again</p>
+            <h3>A wallet signature exists, but report delivery was not confirmed.</h3>
+            <p>The original <code>PAYMENT-SIGNATURE</code> remains in memory only. Recovery replays that exact header; it is never written to localStorage, rendered, or logged.</p>
+            <dl>
+              <div><dt>Payer</dt><dd><a href={`${integrations?.injective.explorerUrl ?? TESTNET_EXPLORER}/address/${walletAccount ?? ""}`} target="_blank" rel="noreferrer">{truncate(walletAccount ?? undefined, 9, 7)} <Icon name="external" size={12} /></a></dd></div>
+              <div><dt>Facilitator / payee</dt><dd><a href={`${integrations?.injective.explorerUrl ?? TESTNET_EXPLORER}/address/${integrations?.x402.payTo ?? ""}`} target="_blank" rel="noreferrer">{truncate(integrations?.x402.payTo ?? undefined, 9, 7)} <Icon name="external" size={12} /></a></dd></div>
+              <div><dt>Authorization nonce</dt><dd><code>{truncate(paymentNonce ?? undefined, 12, 10)}</code></dd></div>
+            </dl>
+            <button type="button" className="amber-button" onClick={() => void recoverPayment()} disabled={status === "recovering"} data-testid="recover-existing-payment">{status === "recovering" ? "Replaying existing signature…" : "Replay existing signature"} <Icon name="arrow" /></button>
           </section>
         )}
 
@@ -808,10 +872,16 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
             <dl>
               <div><dt>Schema</dt><dd>{proof.packet.schema}</dd></div>
               <div><dt>Packet hash</dt><dd><code>{truncate(proof.packet.packetHash, 12, 10)}</code></dd></div>
-              <div><dt>Confidence</dt><dd>{percent(proof.packet.verification.confidenceBps)}</dd></div>
+              {proof.packet.evidenceRoot && <div><dt>Evidence root</dt><dd><code>{truncate(proof.packet.evidenceRoot, 12, 10)}</code></dd></div>}
+              {proof.packet.issuerAddress && <div><dt>Issuer</dt><dd><code>{truncate(proof.packet.issuerAddress, 9, 7)}</code></dd></div>}
+              {proof.packet.issuerKeyId && <div><dt>Issuer key ID</dt><dd><code>{truncate(proof.packet.issuerKeyId, 12, 10)}</code></dd></div>}
+              {proof.packet.issuerPolicyVersion && <div><dt>Issuer policy</dt><dd><code>{proof.packet.issuerPolicyVersion}</code></dd></div>}
+              {proof.packet.issuedAt && <div><dt>Issued at</dt><dd>{new Date(proof.packet.issuedAt).toISOString()}</dd></div>}
+              <div><dt>Evidence score</dt><dd>{evidenceScore(proof.packet.verification.confidenceBps)}</dd></div>
               <div><dt>Settlement</dt><dd>{proof.packet.settlement.allowed ? "Allowed" : "Held"}</dd></div>
               {walletAccount && <div><dt>Payer</dt><dd><code>{truncate(walletAccount, 9, 7)}</code></dd></div>}
             </dl>
+            <VerificationLayers verification={verification} />
             <div className="packet-checks">
               {([
                 ["packet-hash", "Packet hash"],
@@ -825,6 +895,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
               <span className={verification?.onchain.checked && verification.onchain.valid ? "passed onchain" : verification?.onchain.checked ? "failed onchain" : "not-checked onchain"}><Icon name={verification?.onchain.checked && verification.onchain.valid ? "check" : verification?.onchain.checked ? "close" : "shield"} />{verification?.onchain.checked && verification.onchain.valid ? "Registry lookup verified" : verification?.onchain.checked ? "Registry lookup did not match" : "On-chain not checked"}</span>
             </div>
             {!verification && <button type="button" className="packet-retry" onClick={() => void retryVerification()}>Retry packet verification <Icon name="arrow" /></button>}
+            {verification && <button type="button" className={`packet-retry tamper-${tamperResult}`} onClick={() => void runTamperControl()} disabled={tamperResult === "running"} data-testid="tamper-control">{tamperResult === "idle" ? "Run tamper negative control" : tamperResult === "running" ? "Testing altered packet…" : tamperResult === "passed" ? "Tampered packet rejected · PASS" : "Tampered packet accepted · FAIL"}<Icon name={tamperResult === "passed" ? "check" : "arrow"} /></button>}
           </section>
         )}
 
@@ -836,13 +907,59 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
 }
 
 export function App() {
-  const { snapshot, integrations, error, busy, load, act } = useReplay();
+  const {
+    snapshot,
+    integrations,
+    catalog,
+    mcpRuntime,
+    error,
+    busy,
+    judgeDemo,
+    load,
+    act,
+    startJudgeDemo,
+    continueJudgeDemo,
+  } = useReplay();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [catalogDetail, setCatalogDetail] = useState<CatalogMatchDetail | null>(null);
+  const [catalogDetailLoading, setCatalogDetailLoading] = useState(false);
+  const [catalogDetailError, setCatalogDetailError] = useState<string | null>(null);
   const [decisionResponse, setDecisionResponse] = useState<DecisionResponse | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [proof, setProof] = useState<ProofPacketResponse | null>(null);
   const [proofVerification, setProofVerification] = useState<ProofVerificationResponse | null>(null);
   const previousReplayCursor = useRef(-1);
+
+  const defaultCatalogMatchId = catalog?.matches.find((entry) => entry.dataMode === "delayed")?.id
+    ?? catalog?.matches[0]?.id
+    ?? snapshot?.match.id
+    ?? null;
+  const activeMatchId = selectedMatchId ?? defaultCatalogMatchId;
+  const selectedCatalogMatch = useMemo(
+    () => catalog?.matches.find((entry) => entry.id === activeMatchId),
+    [activeMatchId, catalog],
+  );
+
+  useEffect(() => {
+    if (!selectedCatalogMatch || selectedCatalogMatch.dataMode === "historical-replay") {
+      setCatalogDetail(null);
+      setCatalogDetailError(null);
+      setCatalogDetailLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setCatalogDetail(null);
+    setCatalogDetailError(null);
+    setCatalogDetailLoading(true);
+    void api.getCatalogMatch(selectedCatalogMatch.id)
+      .then((result) => { if (!cancelled) setCatalogDetail(result); })
+      .catch((cause: unknown) => {
+        if (!cancelled) setCatalogDetailError(cause instanceof Error ? cause.message : "Source detail did not load.");
+      })
+      .finally(() => { if (!cancelled) setCatalogDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedCatalogMatch]);
 
   useEffect(() => {
     if (!snapshot) return;
@@ -894,15 +1011,30 @@ export function App() {
   const anchor = matchingDecision
     ? matchingDecision.anchor ?? selected?.anchor
     : selected?.anchor;
+  const packetVerified = proofVerification?.valid === true;
+  const onchainVerified =
+    proofVerification?.onchain.checked === true && proofVerification.onchain.valid === true;
+  const conflictActive = Boolean(selected?.verification?.conflicts.length);
+  const showReplay = !selectedCatalogMatch || selectedCatalogMatch.dataMode === "historical-replay";
+  const activeDataMode = selectedCatalogMatch?.dataMode ?? snapshot.mode;
+  const proofMatchId = showReplay ? snapshot.match.id : selectedCatalogMatch.id;
+  const proofEventId = showReplay ? selected?.eventId ?? "final-result" : "final-result";
 
   return (
     <div className="app-shell">
-      <AppHeader integrations={integrations} />
+      <AppHeader integrations={integrations} mode={activeDataMode} mcpRuntime={mcpRuntime} />
       <div className="replay-disclosure" role="status">
-        <strong>Historical replay · not live</strong>
-        <span>{snapshot.disclosure || snapshot.match.replayDisclosure}</span>
-        <small>All source timestamps and synthetic fault injection are disclosed.</small>
+        <strong>{activeDataMode === "historical-replay" ? "Historical replay · not live" : activeDataMode === "delayed" ? "Delayed snapshot · not live" : "Official schedule · no score"}</strong>
+        <span>{selectedCatalogMatch?.disclosure ?? snapshot.disclosure ?? snapshot.match.replayDisclosure}</span>
+        <small>{showReplay ? "All source timestamps and synthetic fault injection are disclosed." : "Provider, retrieval time, source snapshot hash, and adapter version are disclosed."}</small>
       </div>
+
+      <MatchCatalogBar
+        catalog={catalog}
+        selectedId={activeMatchId ?? snapshot.match.id}
+        detail={catalogDetail}
+        onSelect={setSelectedMatchId}
+      />
 
       {error && <div className="inline-error" role="alert"><span>Signal interruption</span>{error}<button type="button" onClick={() => void load()}>Reconnect</button></div>}
       {snapshot.errors.map((runtimeError) => {
@@ -918,35 +1050,83 @@ export function App() {
         );
       })}
 
-      <main id="match-sheet" className="match-sheet">
-        <div className="left-rail">
-          <Scoreboard snapshot={snapshot} />
-          <ReplayControls snapshot={snapshot} busy={busy} onAction={(action) => void act(action)} />
-          <EventTimeline records={snapshot.events} selectedId={selected?.eventId ?? null} onSelect={setSelectedId} />
-        </div>
+      {showReplay ? <><JudgeDemo
+        state={judgeDemo}
+        cursor={snapshot.replay.cursor}
+        total={snapshot.replay.totalFrames}
+        paymentVerified={packetVerified}
+        chainVerified={onchainVerified}
+        onStart={() => void startJudgeDemo()}
+        onContinue={() => void continueJudgeDemo()}
+        onInspectProof={() => setDrawerOpen(true)}
+      />
 
-        <div className="center-rail">
-          <Proofline record={selected} />
-          <SettlementGate
-            key={decision.allowed ? "gate-open" : "gate-held"}
-            decision={decision}
-            anchor={anchor}
-            openProof={() => setDrawerOpen(true)}
-          />
-        </div>
+      <main id="match-sheet" className="match-sheet is-revised">
+        <section className="decision-board" aria-label="Three-question settlement summary">
+          <article className="decision-question question-happened" data-question="what-happened">
+            <div className="question-label"><span>01</span><p><strong>What happened?</strong><small>Recorded match state</small></p></div>
+            <Scoreboard snapshot={snapshot} />
+          </article>
 
-        <aside className="right-rail" aria-label="Evidence and infrastructure">
-          <EvidenceRail record={selected} />
-          <AnchorReceiptView anchor={anchor} verification={selected?.verification} integrations={integrations} />
-          <FundingReadiness integrations={integrations} />
-        </aside>
+          <article className="decision-question question-trust" data-question="evidence-trust">
+            <div className="question-label inverse"><span>02</span><p><strong>Do we believe it?</strong><small>Deterministic evidence policy</small></p></div>
+            <Proofline record={selected} />
+          </article>
 
-        <AgentTrace snapshot={snapshot} record={selected} proof={proof} decision={decision} proofVerification={proofVerification} />
-      </main>
+          <article className="decision-question question-settle" data-question="agent-settlement">
+            <SettlementGate
+              key={`${decision.allowed ? "gate-open" : "gate-held"}-${onchainVerified}`}
+              decision={decision}
+              anchor={anchor}
+              onchainVerified={onchainVerified}
+              openProof={() => setDrawerOpen(true)}
+            />
+          </article>
+        </section>
+
+        <section className="evidence-workbench" aria-labelledby="workbench-heading">
+          <div className="workbench-heading"><p className="eyebrow">Evidence workbench</p><h2 id="workbench-heading">Open only the detail you need</h2></div>
+
+          <details className="detail-panel" data-testid="replay-details">
+            <summary><span>Replay controls & match timeline</span><small>Manual frame control · {snapshot.events.length} canonical events</small></summary>
+            <div className="detail-grid replay-detail-grid">
+              <ReplayControls snapshot={snapshot} busy={busy} onAction={(action) => void act(action)} />
+              <EventTimeline records={snapshot.events} selectedId={selected?.eventId ?? null} onSelect={setSelectedId} />
+            </div>
+          </details>
+
+          <details className={`detail-panel ${conflictActive ? "has-active-conflict" : ""}`} data-testid="source-details">
+            <summary><span>Source evidence & mismatch fields</span><small>{conflictActive ? "Conflict active · settlement quarantined" : `${selected?.observations.length ?? 0} attributed observations`}</small></summary>
+            <EvidenceRail record={selected} />
+          </details>
+
+          <details className="detail-panel" data-testid="chain-details">
+            <summary><span>Injective commitment & x402 proof</span><small>{onchainVerified ? "Fresh registry lookup verified" : anchor?.receipt.mode === "demo" ? "Demo commitment · no chain transaction" : "External checks pending"}</small></summary>
+            <div className="detail-grid infrastructure-detail-grid">
+              <AnchorReceiptView anchor={anchor} verification={selected?.verification} integrations={integrations} />
+              <div className="proof-entry-card"><Icon name="shield" /><h3>Verify the paid packet</h3><p>Negotiate HTTP 402, inspect exact terms, then independently recompute integrity and query the registry.</p><button type="button" className="amber-button" onClick={() => setDrawerOpen(true)}>Inspect x402 + chain proof <Icon name="arrow" /></button></div>
+            </div>
+          </details>
+
+          <details className="detail-panel" data-testid="agent-details">
+            <summary><span>Agent execution evidence</span><small>Illustrative until runtime health and logs are available</small></summary>
+            <AgentTrace snapshot={snapshot} record={selected} proof={proof} decision={decision} proofVerification={proofVerification} runtime={mcpRuntime} />
+          </details>
+
+          <details className="detail-panel future-panel" data-testid="future-details">
+            <summary><span>Future capability</span><small>CCTP deliberately outside the core judge path</small></summary>
+            <FundingReadiness integrations={integrations} />
+          </details>
+        </section>
+      </main></> : selectedCatalogMatch ? <CatalogMatchView match={selectedCatalogMatch} detail={catalogDetail} loading={catalogDetailLoading} detailError={catalogDetailError} onVerifyAnchor={() => api.verifyMatchAnchor(selectedCatalogMatch.id)} onOpenProof={() => setDrawerOpen(true)} onOpenReplay={() => setSelectedMatchId(snapshot.match.id)} /> : null}
 
       <footer className="site-footer">
         <span>PROOFLINE / VARA ENGINE</span>
         <p>Display reported events. Settle only verified evidence.</p>
+        <div className="build-stamp" aria-label={`Build commit ${BUILD_COMMIT}; release ${RELEASE_ID}`}>
+          <code>commit {BUILD_COMMIT.slice(0, 12)}</code>
+          <code>release {RELEASE_ID}</code>
+        </div>
         <a href={integrations?.injective.explorerUrl ?? TESTNET_EXPLORER} target="_blank" rel="noreferrer">Injective testnet <Icon name="external" size={13} /></a>
       </footer>
 
@@ -956,8 +1136,8 @@ export function App() {
 
       <ProofDrawer
         open={drawerOpen}
-        matchId={snapshot.match.id}
-        eventId={selected?.eventId ?? "final-result"}
+        matchId={proofMatchId}
+        eventId={proofEventId}
         integrations={integrations}
         onClose={() => setDrawerOpen(false)}
         onProof={setProof}

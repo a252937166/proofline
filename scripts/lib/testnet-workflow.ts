@@ -1,10 +1,32 @@
 import { chmod, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { keccak256, stringToHex, type Hex } from "viem";
 
 export const INJECTIVE_TESTNET_CHAIN_ID = 1_439;
 export const INJECTIVE_TESTNET_NETWORK = "eip155:1439";
 export const INJECTIVE_TESTNET_USDC =
   "0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d";
 export const X402_PRICE_ATOMIC = 10_000n;
+export const PROOFLINE_REGISTRY_ID_TEXT =
+  "proofline.match-proof-registry.v3";
+export const PROOFLINE_REGISTRY_ID = keccak256(
+  stringToHex(PROOFLINE_REGISTRY_ID_TEXT),
+);
+
+export function isBytes32(value: unknown): value is Hex {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{64}$/.test(value);
+}
+
+export function assertMatchingEvidenceRoot(
+  expected: unknown,
+  actual: unknown,
+): asserts expected is Hex {
+  if (!isBytes32(expected) || expected === `0x${"0".repeat(64)}`) {
+    throw new Error("The prepared evidenceRoot must be a non-zero bytes32 commitment");
+  }
+  if (!isBytes32(actual) || actual.toLowerCase() !== expected.toLowerCase()) {
+    throw new Error("The on-chain evidenceRoot does not match the prepared evidence commitment");
+  }
+}
 
 export const TESTNET_WRITE_ACK = {
   anchor: "I_UNDERSTAND_ONE_INJECTIVE_TESTNET_ANCHOR_WILL_BE_SENT",

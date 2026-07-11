@@ -19,5 +19,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # npm/cli#4828 can omit Rollup's Linux optional binary when the lockfile
+      # was generated on macOS. Install the exact native peer already selected
+      # by the lockfile before Vitest/Vite starts.
+      - name: Restore Rollup native binary
+        shell: bash
+        run: |
+          ROLLUP_VERSION="$(node -p "require('./node_modules/rollup/package.json').version")"
+          npm install --no-save --package-lock=false "@rollup/rollup-linux-x64-gnu@${ROLLUP_VERSION}"
       - run: npm run check
       - run: npm audit --audit-level=high

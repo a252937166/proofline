@@ -16,11 +16,13 @@ function providerStatus(input: {
   return {
     id: input.id,
     configured: input.configured,
-    status: input.configured ? "ready" : "not-configured",
+    status: input.configured
+      ? "credential-present-unverified"
+      : "not-configured",
     environmentVariable: input.environmentVariable,
-    capability: "credential-readiness-only",
+    capability: "credential-presence-only",
     disclosure: input.configured
-      ? `${input.providerLabel} credentials are present server-side. Replay routes still return attributed saved facts; raw provider payloads are never exposed.`
+      ? `${input.providerLabel} credentials are present server-side but are not an active data feed. Provider authorization and a successful fetch must be verified before live mode can be enabled.`
       : `${input.providerLabel} is optional and disabled because no server-side token is configured.`,
   };
 }
@@ -43,9 +45,11 @@ export function integrationStatus(
   return {
     schema: "proofline.integrations.v1",
     dataMode: {
-      active: "historical-replay",
+      active: "multi-mode-catalog",
+      available: ["delayed", "scheduled", "historical-replay"],
+      liveProviderActive: false,
       disclosure:
-        "Historical Replay · Wales vs IR Iran · 25 Nov 2022 · Not Live",
+        "2026 delayed/scheduled snapshots and a 2022 historical replay are available. No route claims live provider data.",
     },
     providers: {
       apiFootball: providerStatus({
@@ -94,7 +98,7 @@ export function integrationStatus(
       disclosure: x402Live
         ? x402Configured
           ? "Official @injectivelabs/x402 middleware is configured for real Injective testnet USDC settlement and loads on demand."
-          : "Live x402 was requested, but X402_PAY_TO plus a facilitator key or URL are not valid. Requests fail closed; no demo success is substituted."
+          : "Live x402 was requested, but X402_PAY_TO plus a facilitator URL or a valid inline key/receipt-proxy token are not configured. Requests fail closed; no demo success is substituted."
         : "Demo sandbox negotiates HTTP 402 without signing, transferring USDC, or creating a transaction. The response is visibly marked simulated.",
     },
     cctp: {

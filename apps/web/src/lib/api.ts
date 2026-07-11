@@ -1,10 +1,15 @@
 import type {
+  CatalogMatchDetail,
   DecisionResponse,
+  FeaturedProofSampleResponse,
   IntegrationsResponse,
+  MatchCatalogResponse,
+  McpRuntimeResponse,
   PaymentQuote,
   ProofPacketResponse,
   ProofVerificationResponse,
   ReplaySnapshot,
+  VerifyAnchorResponse,
 } from "../types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ?? "/api";
@@ -110,6 +115,22 @@ export const api = {
   pauseReplay: () => request<ReplaySnapshot>("/replay/pause", { method: "POST" }),
 
   getIntegrations: () => request<IntegrationsResponse>("/integrations"),
+
+  getMatchCatalog: () => request<MatchCatalogResponse>("/matches"),
+
+  getCatalogMatch: (matchId: string) =>
+    request<CatalogMatchDetail>(`/matches/${encodeURIComponent(matchId)}`),
+
+  verifyMatchAnchor: (matchId: string, eventId = "final-result") =>
+    request<VerifyAnchorResponse>(
+      `/matches/${encodeURIComponent(matchId)}/verify-anchor?eventId=${encodeURIComponent(eventId)}`,
+      { method: "POST" },
+    ),
+
+  getMcpRuntime: () => request<McpRuntimeResponse>("/mcp/runtime"),
+
+  getFeaturedProofSample: () =>
+    request<FeaturedProofSampleResponse>("/proofs/samples/featured"),
 
   getDecision: (matchId: string, eventId: string) =>
     request<DecisionResponse>(

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { randomUUID } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import {
@@ -25,10 +26,23 @@ import {
   publicRequirement,
 } from "./policy.js";
 
+const MCP_VERSION = "0.2.0";
 const api = new ProoflineApi();
 const policy = new SpendPolicy();
-const server = new McpServer({ name: "proofline", version: "0.1.0" });
+const server = new McpServer({ name: "proofline", version: MCP_VERSION });
 const sourceNetworks = cctpSourceNetworks();
+const registeredTools = [
+  "list_matches",
+  "get_match",
+  "get_match_events",
+  "verify_event",
+  "assess_settlement_readiness",
+  "quote_match_proof",
+  "purchase_match_proof",
+  "verify_proof_packet",
+  "verify_onchain_anchor",
+  "prepare_cctp_funding",
+] as const;
 
 // McpServer's schema-preserving generic is excellent for small servers, but
 // repeatedly instantiating it together with viem's ABI generics makes tsc use
@@ -56,10 +70,81 @@ function output(value: unknown, isError = false) {
   return { content: [{ type: "text" as const, text: json }], ...(isError ? { isError: true } : {}) };
 }
 
-async function run(action: () => Promise<unknown>) {
+function summarizeInput(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(input).map(([key, value]) => {
+      if (/signature|private|secret|token/i.test(key)) return [key, "[redacted]"];
+      if (typeof value === "string") return [key, value.slice(0, 160)];
+      if (typeof value === "boolean" || typeof value === "number") {
+        return [key, value];
+      }
+      if (value === undefined || value === null) return [key, value ?? null];
+      return [key, `[${Array.isArray(value) ? "array" : "object"}]`];
+    }),
+  );
+}
+
+function summarizeResult(value: unknown): string {
   try {
-    return output(await action());
+    return JSON.stringify(value, (key, item: unknown) => {
+      if (/signature|private|secret|token/i.test(key)) return "[redacted]";
+      return typeof item === "bigint" ? item.toString() : item;
+    }).slice(0, 500);
+  } catch {
+    return "Result was not JSON serializable";
+  }
+}
+
+async function recordRuntime(path: string, body: unknown): Promise<void> {
+  const token = process.env.PROOFLINE_MCP_AUDIT_TOKEN;
+  try {
+    await api.postWithHeaders(
+      path,
+      body,
+      token ? { "X-Proofline-MCP-Audit": token } : {},
+      [401, 503],
+    );
+  } catch {
+    // Runtime audit evidence is best-effort and never changes tool semantics.
+  }
+}
+
+async function run(
+  tool: string,
+  input: Record<string, unknown>,
+  action: () => Promise<unknown>,
+) {
+  const startedAt = Date.now();
+  try {
+    const value = await action();
+    await recordRuntime("/mcp/runtime/logs", {
+      id: randomUUID(),
+      sessionId: api.sessionId,
+      tool,
+      inputSummary: summarizeInput(input),
+      outcome: "success",
+      resultSummary: summarizeResult(value),
+      durationMs: Date.now() - startedAt,
+      at: new Date().toISOString(),
+    });
+    return output(value);
   } catch (error) {
+    const failure =
+      error instanceof ApiFailure
+        ? `HTTP ${error.response.status}`
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    await recordRuntime("/mcp/runtime/logs", {
+      id: randomUUID(),
+      sessionId: api.sessionId,
+      tool,
+      inputSummary: summarizeInput(input),
+      outcome: "failure",
+      resultSummary: failure.slice(0, 500),
+      durationMs: Date.now() - startedAt,
+      at: new Date().toISOString(),
+    });
     if (error instanceof ApiFailure) {
       return output(
         { error: error.message, status: error.response.status, response: error.response.data },
@@ -106,10 +191,18 @@ registerTool(
     description:
       "List Proofline matches. Read mode and disclosure before describing data as live or historical replay.",
     inputSchema: {
-      mode: z.enum(["replay", "live"]).optional().describe("Optional honest runtime mode filter"),
+      mode: z
+        .enum(["replay", "live", "delayed", "scheduled"])
+        .optional()
+        .describe("Optional honest data-mode filter"),
     },
   },
-  ({ mode }) => run(async () => (await api.get(`/matches${query({ mode })}`)).data),
+  ({ mode }) =>
+    run(
+      "list_matches",
+      { mode },
+      async () => (await api.get(`/matches${query({ mode })}`)).data,
+    ),
 );
 
 registerTool(
@@ -118,18 +211,27 @@ registerTool(
     description: "Get match metadata, score, replay disclosure, events, and source provenance.",
     inputSchema: { match_id: z.string().min(1) },
   },
-  ({ match_id }) => run(async () => (await api.get(`/matches/${pathPart(match_id)}`)).data),
+  ({ match_id }) =>
+    run(
+      "get_match",
+      { match_id },
+      async () => (await api.get(`/matches/${pathPart(match_id)}`)).data,
+    ),
 );
 
 registerTool(
-  "get_live_events",
+  "get_match_events",
   {
     description:
-      "Get the current event feed. Despite the tool name, the response can be a historical replay and must retain its disclosure.",
+      "Get events for a match. The response machine-readably distinguishes live, delayed, scheduled, and historical-replay modes; never describe non-live data as live.",
     inputSchema: { match_id: z.string().min(1) },
   },
   ({ match_id }) =>
-    run(async () => (await api.get(`/matches/${pathPart(match_id)}/events`)).data),
+    run(
+      "get_match_events",
+      { match_id },
+      async () => (await api.get(`/matches/${pathPart(match_id)}/events`)).data,
+    ),
 );
 
 registerTool(
@@ -143,7 +245,7 @@ registerTool(
     },
   },
   ({ match_id, event_id }) =>
-    run(async () =>
+    run("verify_event", { match_id, event_id }, async () =>
       (await api.get(`/matches/${pathPart(match_id)}/events/${pathPart(event_id)}`)).data,
     ),
 );
@@ -159,7 +261,7 @@ registerTool(
     },
   },
   ({ match_id, event_id }) =>
-    run(async () =>
+    run("assess_settlement_readiness", { match_id, event_id }, async () =>
       (
         await api.get(
           `/matches/${pathPart(match_id)}/decision${query({ eventId: event_id })}`,
@@ -179,7 +281,7 @@ registerTool(
     },
   },
   ({ match_id, event_id }) =>
-    run(async () => {
+    run("quote_match_proof", { match_id, event_id }, async () => {
       const response = await quoteProof(match_id, event_id);
       const requirements = extractPaymentRequirements(response);
       return {
@@ -210,7 +312,10 @@ registerTool(
     },
   },
   ({ match_id, event_id, payment_signature, approved }) =>
-    run(async () => {
+    run(
+      "purchase_match_proof",
+      { match_id, event_id, payment_signature, approved },
+      async () => {
       const quote = await quoteProof(match_id, event_id);
       if (quote.status !== 402) {
         return {
@@ -258,7 +363,8 @@ registerTool(
         policy: ledger,
         report: report.data,
       };
-    }),
+      },
+    ),
 );
 
 registerTool(
@@ -270,7 +376,12 @@ registerTool(
       packet: z.record(z.unknown()).describe("Proof packet returned by purchase_match_proof"),
     },
   },
-  ({ packet }) => run(async () => (await api.post("/proofs/verify", { packet })).data),
+  ({ packet }) =>
+    run(
+      "verify_proof_packet",
+      { packet },
+      async () => (await api.post("/proofs/verify", { packet })).data,
+    ),
 );
 
 const registryReadAbi = [
@@ -283,7 +394,7 @@ const registryReadAbi = [
   },
   {
     type: "function",
-    name: "verifyProof",
+    name: "verifyLatestSettlementProof",
     stateMutability: "view",
     inputs: [
       { name: "matchIdHash", type: "bytes32" },
@@ -295,12 +406,13 @@ const registryReadAbi = [
       { name: "confidenceBps", type: "uint16" },
       { name: "revision", type: "uint64" },
       { name: "decisionHash", type: "bytes32" },
+      { name: "evidenceRoot", type: "bytes32" },
     ],
   },
 ] as const;
 
 const EXPECTED_REGISTRY_ID = keccak256(
-  stringToHex("proofline.match-proof-registry.v1"),
+  stringToHex("proofline.match-proof-registry.v3"),
 );
 
 const proofStates = ["provisional", "verified", "disputed", "final", "rejected"] as const;
@@ -309,14 +421,18 @@ registerTool(
   "verify_onchain_anchor",
   {
     description:
-      "Perform a fresh eth_call against the API-configured MatchProofRegistry on Injective EVM testnet. Refuses demo receipts and arbitrary RPC or contract overrides.",
+      "Perform a fresh latest-settlement eth_call against the API-configured MatchProofRegistry on Injective EVM testnet and require the packet evidence root. Refuses demo receipts and arbitrary RPC or contract overrides.",
     inputSchema: {
       match_id: z.string().min(1),
       event_hash: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+      evidence_root: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
     },
   },
-  ({ match_id, event_hash }) =>
-    run(async () => {
+  ({ match_id, event_hash, evidence_root }) =>
+    run(
+      "verify_onchain_anchor",
+      { match_id, event_hash, evidence_root },
+      async () => {
       const integrationResponse = await api.get("/integrations");
       const root = object(integrationResponse.data);
       const injective = object(root?.injective);
@@ -377,19 +493,21 @@ registerTool(
       ]);
       if (!code || code === "0x") throw new Error("No contract code exists at the configured registry address");
       if (registryId !== EXPECTED_REGISTRY_ID) {
-        throw new Error("Configured contract is not a Proofline MatchProofRegistry v1 instance");
+        throw new Error("Configured contract is not a Proofline MatchProofRegistry v3 instance");
       }
 
       const matchIdHash = keccak256(stringToHex(match_id.trim().toUpperCase()));
-      const [valid, state, confidenceBps, revision, decisionHash] = await client.readContract({
+      const [valid, state, confidenceBps, revision, decisionHash, committedEvidenceRoot] = await client.readContract({
         address: registryAddress as Address,
         abi: registryReadAbi,
-        functionName: "verifyProof",
+        functionName: "verifyLatestSettlementProof",
         args: [matchIdHash, event_hash as Hex],
       });
       const blockNumber = await client.getBlockNumber();
+      const evidenceRootMatches =
+        committedEvidenceRoot.toLowerCase() === evidence_root.toLowerCase();
       return {
-        valid,
+        valid: valid && evidenceRootMatches,
         onchainRead: true,
         network: "eip155:1439",
         chainId: actualChainId,
@@ -397,16 +515,20 @@ registerTool(
         registryAddress,
         matchIdHash,
         eventHash: event_hash,
+        expectedEvidenceRoot: evidence_root,
         latest: {
           state: proofStates[state] ?? `unknown-${state}`,
           confidenceBps,
           revision: revision.toString(),
           decisionHash,
+          evidenceRoot: committedEvidenceRoot,
+          evidenceRootMatches,
         },
         disclosure:
           "Fresh MatchProofRegistry eth_call. A matching commitment does not independently prove the sporting fact.",
       };
-    }),
+      },
+    ),
 );
 
 registerTool(
@@ -422,7 +544,15 @@ registerTool(
     },
   },
   ({ source_network, amount_usdc, destination_address, source_usdc_address }) =>
-    run(async () => {
+    run(
+      "prepare_cctp_funding",
+      {
+        source_network,
+        amount_usdc,
+        destination_address,
+        source_usdc_address,
+      },
+      async () => {
       const amount = parseUsdc(amount_usdc);
       if (amount <= 0n) throw new Error("CCTP funding amount must be positive");
       const remainingProofBudget = parseUsdc(policy.snapshot().sessionRemainingUsdc);
@@ -458,8 +588,19 @@ registerTool(
         ],
         integrations: integrations.data,
       };
-    }),
+      },
+    ),
 );
 
+const sendHeartbeat = () =>
+  recordRuntime("/mcp/runtime/heartbeat", {
+    sessionId: api.sessionId,
+    serverVersion: MCP_VERSION,
+    transport: "stdio",
+    tools: [...registeredTools],
+    at: new Date().toISOString(),
+  });
+await sendHeartbeat();
+setInterval(() => void sendHeartbeat(), 60_000).unref();
 const transport = new StdioServerTransport();
 await server.connect(transport);

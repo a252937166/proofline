@@ -11,6 +11,8 @@ export interface AnchorRecord {
   receipt: AnchorReceipt;
   simulated: boolean;
   disclosure: string;
+  /** Policy result frozen at anchor time so later packet delivery cannot drift. */
+  verification?: VerificationResult;
 }
 
 export interface EventView {

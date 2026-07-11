@@ -3,6 +3,8 @@ dist/
 .env
 .env.local
 coverage/
+playwright-report/
+test-results/
 .DS_Store
 *.log
 contracts/artifacts/

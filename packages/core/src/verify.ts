@@ -54,33 +54,48 @@ export function verifyEvent(
     candidates.set(canonical.eventHash, entry);
   }
 
-  const ranked = [...candidates.values()].sort((left, right) => {
-    const weight = (entry: (typeof left)) => {
-      const groups = new Map<string, number>();
-      for (const observation of entry.observations) {
-        groups.set(
-          observation.source.independenceGroup,
-          Math.max(
-            groups.get(observation.source.independenceGroup) ?? 0,
-            observation.source.reliabilityBps,
-          ),
-        );
+  const groupRepresentatives = (entry: {
+    observations: EventObservation[];
+  }): Map<string, EventObservation> => {
+    const groups = new Map<string, EventObservation>();
+    for (const observation of entry.observations) {
+      const group = observation.source.independenceGroup;
+      const current = groups.get(group);
+      if (
+        !current ||
+        observation.source.reliabilityBps > current.source.reliabilityBps ||
+        (observation.source.reliabilityBps === current.source.reliabilityBps &&
+          observation.id.localeCompare(current.id) < 0)
+      ) {
+        groups.set(group, observation);
       }
-      return [...groups.values()].reduce((sum, value) => sum + value, 0);
-    };
-    return weight(right) - weight(left) || right.observations.length - left.observations.length;
+    }
+    return groups;
+  };
+  const candidateWeight = (entry: {
+    observations: EventObservation[];
+  }): number =>
+    [...groupRepresentatives(entry).values()].reduce(
+      (sum, observation) => sum + observation.source.reliabilityBps,
+      0,
+    );
+
+  // Only independent groups can influence winner selection. Repeating the
+  // same provider payload never adds voting weight or wins a tie.
+  const ranked = [...candidates.values()].sort((left, right) => {
+    const weightDelta = candidateWeight(right) - candidateWeight(left);
+    if (weightDelta !== 0) return weightDelta;
+    const groupDelta =
+      groupRepresentatives(right).size - groupRepresentatives(left).size;
+    if (groupDelta !== 0) return groupDelta;
+    return left.canonical.eventHash.localeCompare(right.canonical.eventHash);
   });
 
   const winner = ranked[0];
   if (!winner) throw new Error(`Unable to select canonical event ${eventId}`);
 
-  const groups = new Map<string, number>();
-  for (const observation of winner.observations) {
-    groups.set(
-      observation.source.independenceGroup,
-      Math.max(groups.get(observation.source.independenceGroup) ?? 0, observation.source.reliabilityBps),
-    );
-  }
+  const winningGroups = groupRepresentatives(winner);
+  const activeGroups = groupRepresentatives({ observations: active });
 
   const conflicts = active
     .filter((observation) => !winner.observations.includes(observation))
@@ -91,14 +106,34 @@ export function verifyEvent(
       fields: differingFields(winner.canonical, observation.payload),
     }));
 
+  const conflictingGroupCount = new Set(
+    active
+      .filter((observation) => !winner.observations.includes(observation))
+      .map((observation) => observation.source.independenceGroup),
+  ).size;
+
   const breakdown: ConfidenceBreakdown = {
-    reliabilityBps: clampBps(average([...groups.values()])),
-    quorumBps: clampBps((groups.size / REQUIRED_SOURCE_GROUPS) * 10_000),
-    agreementBps: clampBps((winner.observations.length / active.length) * 10_000),
-    freshnessBps: clampBps(
-      average(winner.observations.map((observation) => freshnessBps(observation.receivedAt, now))),
+    reliabilityBps: clampBps(
+      average(
+        [...winningGroups.values()].map(
+          (observation) => observation.source.reliabilityBps,
+        ),
+      ),
     ),
-    conflictPenaltyBps: Math.min(3_000, conflicts.length * 1_200),
+    quorumBps: clampBps(
+      (winningGroups.size / REQUIRED_SOURCE_GROUPS) * 10_000,
+    ),
+    agreementBps: clampBps(
+      (winningGroups.size / activeGroups.size) * 10_000,
+    ),
+    freshnessBps: clampBps(
+      average(
+        [...winningGroups.values()].map((observation) =>
+          freshnessBps(observation.receivedAt, now),
+        ),
+      ),
+    ),
+    conflictPenaltyBps: Math.min(3_000, conflictingGroupCount * 1_200),
   };
 
   const confidenceBps = clampBps(
@@ -118,12 +153,14 @@ export function verifyEvent(
   if (conflicts.length > 0) {
     state = "contested";
     reasons.push("A material source conflict is still active; settlement is quarantined.");
-  } else if (groups.size < REQUIRED_SOURCE_GROUPS) {
+  } else if (winningGroups.size < REQUIRED_SOURCE_GROUPS) {
     state = "observed";
     reasons.push("Waiting for a second independent source group.");
   } else if (confidenceBps < thresholdBps) {
     state = "insufficient";
-    reasons.push(`Confidence ${confidenceBps} bps is below the ${thresholdBps} bps threshold.`);
+    reasons.push(
+      `Evidence score ${(confidenceBps / 100).toFixed(1)}/100 is below the ${(thresholdBps / 100).toFixed(1)}/100 policy threshold.`,
+    );
   } else {
     state = "verified";
     reasons.push("Independent sources agree and the confidence threshold is satisfied.");
@@ -134,11 +171,14 @@ export function verifyEvent(
     canonical: winner.canonical,
     state,
     confidenceBps,
-    confidenceLabel: `${(confidenceBps / 100).toFixed(1)}%`,
+    evidenceScore: confidenceBps / 100,
+    confidenceLabel: `${(confidenceBps / 100).toFixed(1)}/100`,
     thresholdBps,
+    thresholdScore: thresholdBps / 100,
     agreeingObservationIds: winner.observations.map((observation) => observation.id),
-    agreeingSourceGroups: [...groups.keys()],
+    agreeingSourceGroups: [...winningGroups.keys()],
     activeObservationCount: active.length,
+    activeSourceGroupCount: activeGroups.size,
     conflicts,
     breakdown,
     reasons,
