@@ -31,7 +31,7 @@ contract MatchProofRegistry {
     uint16 public constant MAX_CONFIDENCE_BPS = 10_000;
     uint16 public constant MIN_VERIFIED_CONFIDENCE_BPS = 8_200;
     uint64 public constant MAX_FUTURE_OBSERVATION_DRIFT = 5 minutes;
-    bytes32 public constant REGISTRY_ID = keccak256("proofline.match-proof-registry.v2");
+    bytes32 public constant REGISTRY_ID = keccak256("proofline.match-proof-registry.v3");
 
     address public owner;
     address public pendingOwner;
@@ -54,7 +54,7 @@ contract MatchProofRegistry {
     error ContractNotPaused();
     error DecisionNotFound(bytes32 matchIdHash, uint64 revision);
     error PreviousDecisionHashMismatch(bytes32 expected, bytes32 actual);
-    error InvalidStateTransition(ProofState previousState, ProofState nextState);
+    error FinalDecisionImmutable(bytes32 decisionHash);
     error AlreadyOwner();
 
     event OwnershipTransferStarted(address indexed currentOwner, address indexed pendingOwner);
@@ -183,26 +183,6 @@ contract MatchProofRegistry {
         );
     }
 
-    /// @notice Convenience entry point used by the Proofline API.
-    /// @dev Appends a Verified revision and automatically links it to the latest revision.
-    function anchorProof(
-        bytes32 matchIdHash,
-        bytes32 eventHash,
-        bytes32 evidenceRoot,
-        uint16 confidenceBps,
-        uint64 observedAt
-    ) external onlyAnchorer whenNotPaused returns (uint64 revision, bytes32 decisionHash) {
-        return _append(
-            matchIdHash,
-            eventHash,
-            evidenceRoot,
-            confidenceBps,
-            observedAt,
-            ProofState.Verified,
-            _latestDecisionHash(matchIdHash)
-        );
-    }
-
     function getRevisionCount(bytes32 matchIdHash) external view returns (uint64) {
         return uint64(decisions[matchIdHash].length);
     }
@@ -323,10 +303,11 @@ contract MatchProofRegistry {
         uint256 previousCount = decisions[matchIdHash].length;
         if (
             previousCount != 0 &&
-            decisions[matchIdHash][previousCount - 1].state == ProofState.Final &&
-            state != ProofState.Final
+            decisions[matchIdHash][previousCount - 1].state == ProofState.Final
         ) {
-            revert InvalidStateTransition(ProofState.Final, state);
+            revert FinalDecisionImmutable(
+                decisions[matchIdHash][previousCount - 1].decisionHash
+            );
         }
 
         revision = uint64(previousCount + 1);

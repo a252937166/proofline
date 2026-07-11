@@ -1,9 +1,9 @@
 {
   "schema": "proofline.agent-tool-evidence.v1",
-  "capturedAt": "2026-07-11T10:38:33Z",
+  "capturedAt": "2026-07-11T12:58:00.897Z",
   "client": {
     "name": "proofline-evidence-client",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "transport": "stdio"
   },
   "server": {
@@ -19,34 +19,47 @@
       "input": {
         "address": "0x672044f1b95740e003D5E62671E6c1DE4Cc058b0"
       },
-      "durationMs": 8,
+      "durationMs": 7,
       "success": true,
       "result": {
-        "inputType": "ethereum",
-        "injAddress": "inj1vusyfude2aqwqq74ucn8rekpmexvqk9sajmcc5",
-        "ethAddress": "0x672044f1b95740e003d5e62671e6c1de4cc058b0"
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"input\": \"0x672044f1b95740e003D5E62671E6c1DE4Cc058b0\",\n  \"inputType\": \"ethereum\",\n  \"injAddress\": \"inj1vusyfude2aqwqq74ucn8rekpmexvqk9sajmcc5\",\n  \"ethAddress\": \"0x672044f1b95740e003d5e62671e6c1de4cc058b0\"\n}"
+          }
+        ]
       }
     },
     {
       "tool": "usdc_native_info",
       "input": {},
-      "durationMs": 2,
+      "durationMs": 1,
       "success": true,
       "result": {
-        "network": "testnet",
-        "cosmosChainId": "injective-888",
-        "evmChainId": 1439,
-        "cctpDomain": 29,
-        "evmAddress": "0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d",
-        "denom": "erc20:0x0c382e685bbeefe5d3d9c29e29e341fee8e84c5d",
-        "decimals": 6,
-        "contracts": {
-          "tokenMessengerV2": "0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA",
-          "messageTransmitterV2": "0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275",
-          "tokenMinterV2": "0xb43db544E2c27092c107639Ad201b3dEfAbcF192"
-        }
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"network\": \"testnet\",\n  \"cosmosChainId\": \"injective-888\",\n  \"evmChainId\": 1439,\n  \"cctpDomain\": 29,\n  \"evmAddress\": \"0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d\",\n  \"denom\": \"erc20:0x0c382e685bbeefe5d3d9c29e29e341fee8e84c5d\",\n  \"decimals\": 6,\n  \"contracts\": {\n    \"tokenMessengerV2\": \"0x8FE6B999Dc680CcFDD5Bf7EB0974218be2542DAA\",\n    \"messageTransmitterV2\": \"0xE737e5cEBEEBa77EFE34D4aa090756590b1CE275\",\n    \"tokenMinterV2\": \"0xb43db544E2c27092c107639Ad201b3dEfAbcF192\"\n  }\n}"
+          }
+        ]
+      }
+    },
+    {
+      "tool": "account_balances",
+      "input": {
+        "address": "inj1vusyfude2aqwqq74ucn8rekpmexvqk9sajmcc5"
+      },
+      "durationMs": 2622,
+      "success": true,
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\n  \"bank\": [\n    {\n      \"denom\": \"erc20:0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d\",\n      \"symbol\": \"USDC\",\n      \"amount\": \"19.980000\",\n      \"decimals\": 6,\n      \"tokenType\": \"erc20\"\n    },\n    {\n      \"denom\": \"inj\",\n      \"symbol\": \"INJ\",\n      \"amount\": \"0.500000\",\n      \"decimals\": 18,\n      \"tokenType\": \"native\"\n    }\n  ],\n  \"subaccount\": []\n}"
+          }
+        ]
       }
     }
   ],
-  "disclosure": "This is a captured execution transcript from the official Injective MCP server on testnet. It contains no private key, signature, or write transaction."
+  "disclosure": "Read-only official Injective MCP calls. No private key, signature, or transaction is requested."
 }

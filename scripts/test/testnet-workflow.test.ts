@@ -71,9 +71,9 @@ describe("testnet workflow safety", () => {
     ).not.toThrow();
   });
 
-  it("pins Registry v2 and validates the evidence commitment read back from chain", () => {
+  it("pins Registry v3 and validates the evidence commitment read back from chain", () => {
     expect(PROOFLINE_REGISTRY_ID_TEXT).toBe(
-      "proofline.match-proof-registry.v2",
+      "proofline.match-proof-registry.v3",
     );
     expect(PROOFLINE_REGISTRY_ID).toBe(
       keccak256(stringToHex(PROOFLINE_REGISTRY_ID_TEXT)),

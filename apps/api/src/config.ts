@@ -38,6 +38,7 @@ export type X402RuntimeConfig =
       facilitatorRpcUrl?: string;
       rpcProxyToken?: string;
       ledgerFile?: string;
+      entitlementFile?: string;
       rpcUrl: string;
       publicApiUrl?: string;
     };
@@ -195,6 +196,17 @@ export function readRuntimeConfig(
   if (ledgerFile && (ledgerFile.includes("\0") || ledgerFile.length > 4_096)) {
     throw new Error("PROOFLINE_X402_LEDGER_FILE must be a valid filesystem path");
   }
+  const entitlementFile = optionalString(
+    env.PROOFLINE_PROOF_ENTITLEMENT_FILE,
+  );
+  if (
+    entitlementFile &&
+    (entitlementFile.includes("\0") || entitlementFile.length > 4_096)
+  ) {
+    throw new Error(
+      "PROOFLINE_PROOF_ENTITLEMENT_FILE must be a valid filesystem path",
+    );
+  }
   if (
     rpcProxyToken &&
     !/^[A-Za-z0-9_-]{32,128}$/.test(rpcProxyToken)
@@ -231,7 +243,8 @@ export function readRuntimeConfig(
         isAddress(payTo) &&
         (Boolean(facilitatorUrl) ||
           (isPrivateKey(facilitatorPrivateKey) &&
-            (env.NODE_ENV !== "production" || Boolean(rpcProxyToken)))),
+            (env.NODE_ENV !== "production" || Boolean(rpcProxyToken)))) &&
+        (env.NODE_ENV !== "production" || Boolean(entitlementFile)),
       ...(isPrivateKey(facilitatorPrivateKey)
         ? { facilitatorPrivateKey }
         : {}),
@@ -240,6 +253,7 @@ export function readRuntimeConfig(
       ...(facilitatorRpcUrl ? { facilitatorRpcUrl } : {}),
       ...(rpcProxyToken ? { rpcProxyToken } : {}),
       ...(ledgerFile ? { ledgerFile } : {}),
+      ...(entitlementFile ? { entitlementFile } : {}),
       ...(publicApiUrl ? { publicApiUrl } : {}),
       rpcUrl,
     };

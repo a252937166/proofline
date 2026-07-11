@@ -13,6 +13,8 @@
     "scheduledAt": "2026-07-09T20:00:00.000Z",
     "dataMode": "delayed",
     "captureMethod": "delayed-snapshot",
+    "capturedAt": "2026-07-11T10:38:05.000Z",
+    "supersededBy": null,
     "disclosure": "Delayed snapshot · captured after full time · not a live feed"
   },
   "eventId": "final-result",
@@ -37,7 +39,7 @@
         "score": { "home": 2, "away": 0 },
         "occurredAt": "2026-07-09T22:00:00.000Z"
       },
-      "rawPayload": {
+      "sourceSnapshot": {
         "eventId": "760510",
         "name": "Morocco at France",
         "date": "2026-07-09T20:00Z",
@@ -73,7 +75,7 @@
         "score": { "home": 2, "away": 0 },
         "occurredAt": "2026-07-09T22:00:00.000Z"
       },
-      "rawPayload": {
+      "sourceSnapshot": {
         "section": "FIFA World Cup 2026 quarter-final fixtures and results",
         "date": "Thursday, 9 July 2026",
         "result": "Match 97 – France 2-0 Morocco - Boston Stadium",

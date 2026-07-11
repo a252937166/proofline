@@ -17,8 +17,9 @@ import type {
   PacketVerificationReport,
   ProofPacket,
   ProofPacketCore,
-  ReplayMatch,
+  ProofPacketMatch,
   VerificationResult,
+  TrustedIssuerHistoryEntry,
 } from "./types.js";
 
 export const PROOFLINE_POLICY_CONFIG_HASH = keccak256(
@@ -34,6 +35,8 @@ export const PROOFLINE_EIP712_DOMAIN = {
   version: "1",
   chainId: 1_439,
 } as const;
+export const PROOFLINE_ISSUER_POLICY_VERSION =
+  "proofline.issuer-policy.v1" as const;
 
 const proofPacketTypes = {
   ProofPacket: [
@@ -61,27 +64,62 @@ export function stableJson(value: unknown): string {
   return JSON.stringify(normalize(value));
 }
 
-export function rawPayloadHash(observation: EventObservation): `0x${string}` {
+export function sourceSnapshotHash(observation: EventObservation): `0x${string}` {
   return keccak256(stringToHex(stableJson(observation.payload)));
+}
+
+/** @deprecated Use sourceSnapshotHash. Kept for proofline.packet.v1 readers. */
+export function rawPayloadHash(observation: EventObservation): `0x${string}` {
+  return sourceSnapshotHash(observation);
 }
 
 export function enrichObservationProvenance(
   observation: EventObservation,
   adapterVersion = `proofline:${observation.source.id}@1.0.0`,
 ): EventObservation {
+  const snapshotHash =
+    observation.provenance?.sourceSnapshotHash ??
+    observation.provenance?.rawPayloadHash ??
+    sourceSnapshotHash(observation);
+  const snapshotAvailable =
+    observation.provenance?.sourceSnapshotAvailable ??
+    observation.provenance?.rawPayloadAvailable ??
+    false;
   return {
     ...observation,
-    provenance: observation.provenance ?? {
-      provider: observation.source.id,
-      rawPayloadHash: rawPayloadHash(observation),
-      receivedAt: observation.receivedAt,
-      eventOccurredAt: observation.payload.occurredAt,
-      adapterVersion,
-      policyConfigHash: PROOFLINE_POLICY_CONFIG_HASH,
-      verifierVersionHash: PROOFLINE_VERIFIER_VERSION_HASH,
-      // Replay fixtures retain the normalized factual subset, not the complete
-      // vendor response. The source URL is kept so a reviewer can inspect it.
-      rawPayloadAvailable: false,
+    provenance: {
+      provider: observation.provenance?.provider ?? observation.source.id,
+      ...(observation.provenance?.dataMode
+        ? { dataMode: observation.provenance.dataMode }
+        : {}),
+      ...(observation.provenance?.captureMethod
+        ? { captureMethod: observation.provenance.captureMethod }
+        : {}),
+      sourceSnapshotHash: snapshotHash,
+      rawPayloadHash: snapshotHash,
+      receivedAt:
+        observation.provenance?.receivedAt ?? observation.receivedAt,
+      eventOccurredAt:
+        observation.provenance?.eventOccurredAt ??
+        observation.payload.occurredAt,
+      ...(observation.provenance?.eventOccurredAtBasis
+        ? {
+            eventOccurredAtBasis:
+              observation.provenance.eventOccurredAtBasis,
+          }
+        : {}),
+      adapterVersion:
+        observation.provenance?.adapterVersion ?? adapterVersion,
+      policyConfigHash:
+        observation.provenance?.policyConfigHash ??
+        PROOFLINE_POLICY_CONFIG_HASH,
+      verifierVersionHash:
+        observation.provenance?.verifierVersionHash ??
+        PROOFLINE_VERIFIER_VERSION_HASH,
+      // Replay fixtures retain a normalized factual subset, not a complete
+      // vendor response. The compatibility aliases remain packet-v1 readable.
+      sourceSnapshotAvailable: snapshotAvailable,
+      rawPayloadAvailable: snapshotAvailable,
     },
   };
 }
@@ -94,7 +132,11 @@ function evidenceLeaves(observations: EventObservation[]) {
       eventId: observation.eventId,
       sourceId: observation.source.id,
       independenceGroup: observation.source.independenceGroup,
-      rawPayloadHash: observation.provenance!.rawPayloadHash,
+      dataMode: observation.provenance!.dataMode,
+      captureMethod: observation.provenance!.captureMethod,
+      sourceSnapshotHash:
+        observation.provenance!.sourceSnapshotHash ??
+        observation.provenance!.rawPayloadHash,
       receivedAt: observation.provenance!.receivedAt,
       eventOccurredAt: observation.provenance!.eventOccurredAt,
       eventOccurredAtBasis: observation.provenance!.eventOccurredAtBasis,
@@ -108,7 +150,7 @@ function evidenceLeaves(observations: EventObservation[]) {
 }
 
 export function evidenceRoot(input: {
-  match: ReplayMatch;
+  match: ProofPacketMatch;
   eventId: string;
   observations: EventObservation[];
   verification: VerificationResult;
@@ -136,6 +178,12 @@ export function hashPacketCore(packet: ProofPacketCore): `0x${string}` {
   return keccak256(stringToHex(stableJson(packet)));
 }
 
+export function issuerKeyId(address: Address): `0x${string}` {
+  return keccak256(
+    stringToHex(`proofline.issuer-key.v1:${getAddress(address)}`),
+  );
+}
+
 function signatureMessage(packet: Pick<
   ProofPacket,
   "packetHash" | "evidenceRoot" | "match" | "verification"
@@ -149,7 +197,7 @@ function signatureMessage(packet: Pick<
 }
 
 export async function buildProofPacket(input: {
-  match: ReplayMatch;
+  match: ProofPacketMatch;
   eventId: string;
   observations: EventObservation[];
   issuerPrivateKey: Hex;
@@ -199,6 +247,9 @@ export async function buildProofPacket(input: {
       verification,
     }),
     issuerAddress: account.address,
+    issuerKeyId: issuerKeyId(account.address),
+    issuerPolicyVersion: PROOFLINE_ISSUER_POLICY_VERSION,
+    issuedAt: now.toISOString(),
     verification,
     ...(input.anchor ? { anchor: input.anchor } : {}),
     settlement,
@@ -233,7 +284,9 @@ export async function verifyProofPacket(
   now = new Date(),
   options: {
     expectedIssuerAddress?: Address;
+    expectedIssuerValidFrom?: string;
     trustedIssuers?: readonly Address[];
+    trustedIssuerHistory?: readonly TrustedIssuerHistoryEntry[];
   } = {},
 ): Promise<PacketVerificationReport> {
   const { packetHash, issuerSignature: _issuerSignature, signatureScheme: _scheme, ...core } = packet;
@@ -330,6 +383,15 @@ export async function verifyProofPacket(
       packetHash === recomputedPacketHash,
       recomputedPacketHash,
     ),
+    check(
+      "issuer-metadata",
+      "Issuer key identity and policy metadata",
+      packet.issuerPolicyVersion === PROOFLINE_ISSUER_POLICY_VERSION &&
+        packet.issuerKeyId === issuerKeyId(packet.issuerAddress) &&
+        Number.isFinite(new Date(packet.issuedAt).getTime()) &&
+        packet.issuedAt === packet.generatedAt,
+      `${packet.issuerKeyId} · ${packet.issuerPolicyVersion}`,
+    ),
   ];
 
   let recoveredAddress: `0x${string}` | null = null;
@@ -350,15 +412,38 @@ export async function verifyProofPacket(
     packet.signatureScheme === "eip712" &&
     recoveredAddress !== null &&
     getAddress(recoveredAddress) === getAddress(packet.issuerAddress);
+  const issuedAt = new Date(packet.issuedAt).getTime();
+  const expectedIssuerValidFrom = options.expectedIssuerValidFrom
+    ? new Date(options.expectedIssuerValidFrom).getTime()
+    : Number.NEGATIVE_INFINITY;
+  const currentIssuerPolicyValid =
+    !options.expectedIssuerValidFrom ||
+    (Number.isFinite(expectedIssuerValidFrom) &&
+      issuedAt >= expectedIssuerValidFrom);
   const trusted = new Set(
     [
-      ...(options.expectedIssuerAddress
+      ...(options.expectedIssuerAddress && currentIssuerPolicyValid
         ? [options.expectedIssuerAddress]
         : []),
       ...(options.trustedIssuers ?? []),
     ].map((address) => getAddress(address)),
   );
-  const trustedIssuer = trusted.has(getAddress(packet.issuerAddress));
+  const trustedByHistory = (options.trustedIssuerHistory ?? []).some((entry) => {
+    const validFrom = new Date(entry.validFrom).getTime();
+    const revokedAt = entry.revokedAt
+      ? new Date(entry.revokedAt).getTime()
+      : Number.POSITIVE_INFINITY;
+    return (
+      Number.isFinite(validFrom) &&
+      (entry.revokedAt === undefined || Number.isFinite(revokedAt)) &&
+      getAddress(entry.address) === getAddress(packet.issuerAddress) &&
+      entry.keyId.toLowerCase() === packet.issuerKeyId.toLowerCase() &&
+      issuedAt >= validFrom &&
+      issuedAt < revokedAt
+    );
+  });
+  const trustedIssuer =
+    trusted.has(getAddress(packet.issuerAddress)) || trustedByHistory;
   const signatureValid = cryptographicValid && trustedIssuer;
   const signatureCheck = check(
     "issuer-signature",
@@ -382,6 +467,13 @@ export async function verifyProofPacket(
       trustedIssuer,
       scheme: "eip712",
       issuerAddress: packet.issuerAddress,
+      issuerKeyId: packet.issuerKeyId,
+      issuerPolicyVersion: packet.issuerPolicyVersion,
+      trustSource: trusted.has(getAddress(packet.issuerAddress))
+        ? "current"
+        : trustedByHistory
+          ? "history"
+          : "untrusted",
       recoveredAddress,
       detail: signatureDetail,
     },

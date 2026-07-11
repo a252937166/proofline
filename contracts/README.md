@@ -37,13 +37,14 @@ hash and anchor event. The delivery packet is assembled after anchoring and its
 separate `packetHash` is issuer-signed and verified off-chain; it is deliberately
 not stored here, avoiding a circular packet-hash/transaction-hash dependency.
 
-`appendRevision` is the settlement-grade write path. It requires the caller to
-provide the current `previousDecisionHash`, so two concurrent writers cannot both
-win. `anchorProof` is a convenience method for a `Verified` revision and links the
-current latest hash automatically. Verified/final revisions require at least
-8,200 bps evidence score and observations more than five minutes in the future
-are rejected. A `Final` decision cannot roll back into Provisional, Verified,
-Disputed, or Rejected.
+`appendRevision` is the only write path. It requires the caller to provide the
+current `previousDecisionHash`, so every integration participates in optimistic
+concurrency and two writers cannot both win from the same prior revision. The
+older convenience writer was removed in Registry v3 because it silently read
+the latest revision and could bypass that boundary. Verified/final revisions
+require at least 8,200 bps evidence score and observations more than five minutes
+in the future are rejected. A `Final` decision is fully immutable: no later
+revision, including another `Final`, can replace it.
 
 There are deliberately two verification views:
 
@@ -62,6 +63,6 @@ Ownership transfer is two-step and rotates the default admin roles on accept.
 
 `npm run test:contract` deploys the compiled bytecode to a fresh in-process
 Hardhat EVM and tests superseded proofs, Disputed/Rejected invalidation, Final
-rollback protection, optimistic concurrency, pause/role rotation, historical vs
+immutability, optimistic concurrency, pause/role rotation, historical vs
 latest queries, and commitment/confidence/time guards. The lightweight compile
 and ABI checks run alongside those deployment tests.

@@ -6,8 +6,9 @@ subtitles. Every scene retains a top-left chapter chip and top-right label:
 
 ## n1 · The referee for machine decisions
 
-**Picture:** branded title card, then the hosted control room at the pre-match
-state. Move the synthetic cursor to “Run replay”.
+**Picture:** branded title card, then the hosted control room on the default
+2026 France–Morocco result. Show the ESPN and FIFA source lanes, then select
+“Verify this 2026 result”.
 
 **Narration:**
 
@@ -15,13 +16,15 @@ state. Move the synthetic cursor to “Run replay”.
 > conflict-aware evidence layer for World Cup products and AI agents. Its VARA
 > engine does not ask an AI model to guess what is true. It records attributed
 > observations, groups related providers, recomputes an Evidence Score, and allows
-> automation only when deterministic evidence rules pass. Today we will replay
-> Wales versus Iran and watch the system refuse a bad source in real time.
+> automation only when deterministic evidence rules pass. This 2026 result is
+> independently sourced, anchored on Injective, and re-verifiable without
+> trusting the page that displays it.
 
 ## n2 · One bad feed must stop automation
 
-**Picture:** run the replay to frame 4. Hold on the red conflict rail, 56.7/100
-Evidence Score, exact `card` field mismatch, and Agent trace `HOLD` state.
+**Picture:** switch to the clearly labelled secondary 2022 conflict replay and
+run it to frame 4. Hold on the red conflict rail, 56.7/100 Evidence Score,
+exact `card` field mismatch, and Agent trace `HOLD` state.
 
 **Narration:**
 
@@ -103,6 +106,6 @@ and video-safe QR codes. Keep all content above y=905.
 
 - Hosted demo: `https://proofline.axiqo.xyz`
 - GitHub: `https://github.com/a252937166/proofline`
-- Contract: `https://testnet.blockscout.injective.network/address/0x959538bE97f6Fc3A09C823514acC176681155A7e`
-- Anchor transaction: `https://testnet.blockscout.injective.network/tx/0x455e933b149e8f291d41f5e5fc58fdca55fdb56c7cfd3a9e1b2f55d32f6c6038`
-- x402 settlement: `https://testnet.blockscout.injective.network/tx/0x79700fa00ff0d0c7a5821608f6221c7805b2feb3fe72133d526b491c41fe624a`
+- Contract: `https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1?tab=contract`
+- 2026 anchor transaction: `https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344`
+- 2026 x402 settlement: `https://testnet.blockscout.injective.network/tx/0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e`

@@ -14,6 +14,12 @@ import { getAddress, isAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
 import {
+  attachProofPurchaseBinding,
+  proofPurchaseMessage,
+  signProofPurchase,
+} from "../apps/api/src/purchase-binding.js";
+
+import {
   INJECTIVE_TESTNET_NETWORK as NETWORK,
   INJECTIVE_TESTNET_USDC as USDC,
   assertAllowedApiOrigin,
@@ -24,7 +30,7 @@ import {
 
 const HARD_MAX_PRICE_ATOMIC = 20_000n; // 0.02 USDC non-overridable ceiling
 const DEFAULT_URL =
-  "http://127.0.0.1:8787/api/matches/WC-2022-WAL-IRN/proof?eventId=final-result";
+  "http://127.0.0.1:8787/api/matches/WC-2026-M97-FRA-MAR/proof?eventId=final-result";
 
 function privateKey(value: string | undefined): Hex {
   if (!value || !/^0x[0-9a-fA-F]{64}$/.test(value)) {
@@ -124,7 +130,7 @@ const quote = await fetch(resource, {
 if (quote.status !== 402) {
   const detail = await quote.text();
   throw new Error(
-    `Expected an x402 quote, received HTTP ${quote.status}. Complete the replay first. ${detail.slice(0, 300)}`,
+    `Expected an x402 quote, received HTTP ${quote.status}. Verify/anchor the selected result first. ${detail.slice(0, 300)}`,
   );
 }
 const quoteBody = (await quote.json()) as unknown;
@@ -148,7 +154,20 @@ const clientConfig = {
 // Sign the exact requirement that passed the allowlist. Do not ask a helper to
 // fetch a second quote, which could change between validation and signing.
 const payload = await createPayment(clientConfig, requirement);
-const paymentSignature = encodePaymentSignatureHeader(payload);
+const purchaseBinding = await signProofPurchase(
+  key,
+  proofPurchaseMessage({
+    sessionId,
+    packetHash: frozenPacketHash,
+    payer: account.address,
+    payee: getAddress(requirement.payTo),
+    amount: requirement.amount,
+    deadline: payload.payload.authorization.validBefore,
+    usdcNonce: payload.payload.authorization.nonce,
+  }),
+);
+const boundPayload = attachProofPurchaseBinding(payload, purchaseBinding);
+const paymentSignature = encodePaymentSignatureHeader(boundPayload);
 decodePaymentSignatureHeader(paymentSignature);
 
 const args = process.argv.slice(2);
@@ -160,6 +179,7 @@ if (!args.includes("--pay")) {
         status: "prepared-no-payment",
         transactionsSubmitted: 0,
         signedAuthorizationPrepared: true,
+        proofPurchaseBound: true,
         signaturePrinted: false,
         network: requirement.network,
         asset: requirement.asset,

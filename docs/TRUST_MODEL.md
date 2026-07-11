@@ -21,8 +21,8 @@ later correction.
 
 ## Evidence Score is not probability
 
-The score displayed as `96.49/100` is a deterministic policy score, **not** a
-96.49% probability that a result is true. It combines configured source
+The primary 2026 score displayed as `98.25/100` is a deterministic policy
+score, **not** a 98.25% probability that a result is true. It combines configured source
 reliability, independent quorum, agreement, freshness, and conflict penalties.
 Those weights are inspectable governance inputs.
 
@@ -48,17 +48,24 @@ The verifier recovers the EIP-712 signer over `packetHash`, `evidenceRoot`,
 trusted issuer set. Cryptographic validity alone is insufficient: an attacker
 who signs a self-created packet remains untrusted.
 
+Packets also carry an address-derived `issuerKeyId`, `issuedAt`, and
+`proofline.issuer-policy.v1`. The verifier can trust retired keys only inside
+an explicit `validFrom`/`revokedAt` history, so rotation does not break old
+reports or silently trust future signatures from a retired key.
+The current issuer is also bounded by `PROOFLINE_ISSUER_VALID_FROM`; recovering
+its address is insufficient for packets allegedly issued before that instant.
+
 ### 3. Latest on-chain commitment
 
 The verifier performs a fresh read against the fully verified registry
-[`0x959538bE97f6Fc3A09C823514acC176681155A7e`](https://testnet.blockscout.injective.network/address/0x959538bE97f6Fc3A09C823514acC176681155A7e).
+[`0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1`](https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1?tab=contract).
 It checks the registry identity and match-wide latest revision, then matches the
 event hash, evidence root, Evidence Score, and settlement-valid state. A later
 `Disputed` or `Rejected` revision invalidates an older proof for settlement even
 though the historical revision remains auditable.
 
 The executed packet passed all three layers; its sanitized evidence is
-[committed in the repository](../evidence/testnet/real-e2e-2026-07-11.json).
+[committed in the repository](../data/evidence/featured-proof.json).
 
 ## Safety invariants
 
@@ -72,10 +79,19 @@ The executed packet passed all three layers; its sanitized evidence is
   replay and 2026 delayed snapshot are never described as live.
 - Every x402 quote freezes a packet identity. Replay progress cannot swap the
   evidence after review and before payment.
+- The full frozen packet and entitlement are atomically persisted. A process
+  restart cannot regenerate a different signed packet after settlement.
+- An independent ProofPurchase signature binds the packet hash to the x402
+  payer, payee, price, deadline, USDC nonce, and session. A same-price USDC
+  authorization cannot be relabelled as another report.
 - Payment metadata is excluded from the sports `evidenceRoot`, avoiding a
   circular dependency between evidence, anchor transaction, and receipt.
 - A paid retry must return the frozen signed packet. If settlement status is
   uncertain, neither the API nor Agent client retries payment automatically.
+- Recovery only replays the exact original payment header from browser memory;
+  the server stores its hash, never the replayable authorization itself.
+- Registry v3 removes the auto-latest convenience writer and makes `Final`
+  fully immutable.
 - Private keys, provider tokens, signatures used for payment, and raw licensed
   payloads never enter browser state, committed evidence, or MCP logs.
 - Demo receipts are machine-labelled and never pass the public-chain layer.

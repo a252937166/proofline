@@ -34,8 +34,16 @@ Morocco**, Match 97 on 9 July 2026. It is always returned with
   France 2-0 Morocco - Boston Stadium.” The repository retains only this
   minimal factual excerpt and its source URL.
 - Each observation exposes provider, independent source group,
-  `rawPayloadHash`, `receivedAt`, `eventOccurredAt`, event-time basis,
-  adapter version, policy-config hash, and verifier-version hash.
+  canonical `sourceSnapshotHash`, `receivedAt`, `eventOccurredAt`, event-time
+  basis, adapter version, policy-config hash, and verifier-version hash.
+  `rawPayloadHash` remains only as a deprecated packet-v1 compatibility alias.
+
+Every catalog snapshot also exposes `capturedAt`, `ageSeconds`,
+`freshnessStatus` (`fresh`, `stale`, `archived`, or `superseded`), and
+`supersededBy`. `isFresh` is the canonical boolean; `isCurrent` is retained as
+a deprecated compatibility alias. Once a scheduled kickoff has passed without
+an active provider, the snapshot becomes `archived` rather than masquerading
+as the current match state.
 
 ## 2026 scheduled fixtures
 
@@ -53,10 +61,10 @@ feed. A deployment may enable `dataMode=live` only after a successful,
 authorized fetch with current provenance. No route in this release claims live
 provider data.
 
-Provider keys remain server-side. Raw provider payloads are not committed. A
+Provider keys remain server-side. Full provider payloads are not committed. A
 deployment must review its provider plan and display rights before turning a
 public live feed on. Proofline stores the smallest normalized facts needed for
-verification plus a raw-content hash, not a resale copy of the upstream data.
+verification plus a source-snapshot hash, not a resale copy of upstream data.
 
 ## Trust statement
 

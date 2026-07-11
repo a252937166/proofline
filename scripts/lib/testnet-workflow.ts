@@ -7,7 +7,7 @@ export const INJECTIVE_TESTNET_USDC =
   "0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d";
 export const X402_PRICE_ATOMIC = 10_000n;
 export const PROOFLINE_REGISTRY_ID_TEXT =
-  "proofline.match-proof-registry.v2";
+  "proofline.match-proof-registry.v3";
 export const PROOFLINE_REGISTRY_ID = keccak256(
   stringToHex(PROOFLINE_REGISTRY_ID_TEXT),
 );

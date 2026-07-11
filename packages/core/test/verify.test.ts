@@ -282,6 +282,41 @@ describe("portable proof packet", () => {
     expect(report.signature.trustedIssuer).toBe(false);
     expect(report.signature.valid).toBe(false);
     expect(report.valid).toBe(false);
+
+    const historicalReport = await verifyProofPacket(attackerPacket, now, {
+      expectedIssuerAddress: trustedPacket.issuerAddress,
+      trustedIssuerHistory: [
+        {
+          keyId: attackerPacket.issuerKeyId,
+          address: attackerPacket.issuerAddress,
+          validFrom: new Date(now.getTime() - 60_000).toISOString(),
+          revokedAt: new Date(now.getTime() + 60_000).toISOString(),
+        },
+      ],
+    });
+    expect(historicalReport.valid).toBe(true);
+    expect(historicalReport.signature.trustSource).toBe("history");
+
+    const notYetValidReport = await verifyProofPacket(attackerPacket, now, {
+      expectedIssuerAddress: attackerPacket.issuerAddress,
+      expectedIssuerValidFrom: new Date(now.getTime() + 1).toISOString(),
+    });
+    expect(notYetValidReport.valid).toBe(false);
+    expect(notYetValidReport.signature.trustSource).toBe("untrusted");
+
+    const revokedHistoricalReport = await verifyProofPacket(attackerPacket, now, {
+      expectedIssuerAddress: trustedPacket.issuerAddress,
+      trustedIssuerHistory: [
+        {
+          keyId: attackerPacket.issuerKeyId,
+          address: attackerPacket.issuerAddress,
+          validFrom: new Date(now.getTime() - 120_000).toISOString(),
+          revokedAt: new Date(now.getTime() - 60_000).toISOString(),
+        },
+      ],
+    });
+    expect(revokedHistoricalReport.valid).toBe(false);
+    expect(revokedHistoricalReport.signature.trustSource).toBe("untrusted");
   });
 
   it("keeps an anchored evidence root stable when packet delivery is ten minutes later", async () => {

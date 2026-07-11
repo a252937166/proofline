@@ -51,7 +51,6 @@ describe("MatchProofRegistry artifact", () => {
     for (const name of [
       "REGISTRY_ID",
       "MIN_VERIFIED_CONFIDENCE_BPS",
-      "anchorProof",
       "appendRevision",
       "verifyHistoricalProof",
       "verifyLatestSettlementProof",
@@ -63,12 +62,13 @@ describe("MatchProofRegistry artifact", () => {
     ]) {
       expect(functions.has(name), `missing ABI function ${name}`).toBe(true);
     }
+    expect(functions.has("anchorProof"), "unsafe convenience writer must stay absent").toBe(false);
   });
 
   it("keeps the source-level guards that compilation alone cannot infer", () => {
     expect(source).toContain("VerifiedConfidenceTooLow");
     expect(source).toContain("ObservedAtInFuture");
-    expect(source).toContain("InvalidStateTransition");
+    expect(source).toContain("FinalDecisionImmutable");
     expect(source).toContain("evidenceRoot");
     expect(source).toContain("previousDecisionHash");
   });

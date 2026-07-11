@@ -306,7 +306,7 @@ if (!args.includes("--broadcast")) {
 }
 
 requireWriteAuthorization("anchor", args, process.env);
-// The API, not this script, performs the five-argument Registry v2 write when
+// The API, not this script, performs the seven-argument Registry v3 write when
 // it applies the explicit anchor frame. This keeps the service as the sole
 // transaction boundary and makes the script an auditable trigger/verifier.
 await api<ReplayState>("/replay/step", { method: "POST" });
@@ -342,7 +342,7 @@ if (
   latest[2] !== anchorVerification.confidenceBps
 ) {
   throw new Error(
-    "The API transaction completed, but the match-wide latest Registry v2 settlement proof does not match eventHash, evidenceRoot, state, and score",
+    "The API transaction completed, but the match-wide latest Registry v3 settlement proof does not match eventHash, evidenceRoot, state, and score",
   );
 }
 

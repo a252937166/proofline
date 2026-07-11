@@ -53,6 +53,21 @@ export interface EventObservation {
   eventId: string;
   source: EvidenceSource;
   receivedAt: string;
+  provenance?: {
+    provider: string;
+    dataMode?: DataMode;
+    captureMethod?: string;
+    sourceSnapshotHash?: `0x${string}`;
+    rawPayloadHash?: `0x${string}`;
+    receivedAt: string;
+    eventOccurredAt: string;
+    eventOccurredAtBasis?: string;
+    adapterVersion: string;
+    policyConfigHash: `0x${string}`;
+    verifierVersionHash: `0x${string}`;
+    rawPayloadAvailable?: boolean;
+    sourceSnapshotAvailable?: boolean;
+  };
   payload: EventPayload;
   correctionOf?: string;
   retracted?: boolean;
@@ -170,13 +185,21 @@ export interface MatchCatalogEntry {
   scheduledDate: string;
   scheduledAt: string | null;
   dataMode: DataMode;
+  captureMethod?: string;
   disclosure: string;
+  capturedAt?: string;
+  ageSeconds?: number;
+  freshnessStatus?: string;
+  isFresh?: boolean;
+  isCurrent?: boolean;
+  supersededBy?: string | null;
   source: {
     provider: string;
     label: string;
     url: string;
     retrievedAt: string;
-    rawPayloadHash: `0x${string}`;
+    sourceSnapshotHash?: `0x${string}`;
+    rawPayloadHash?: `0x${string}`;
     adapterVersion: string;
   };
 }
@@ -188,6 +211,39 @@ export interface MatchCatalogResponse {
   liveProviderActive: boolean;
   disclosure: string;
   matches: MatchCatalogEntry[];
+}
+
+export interface CatalogMatchDetail {
+  mode: DataMode;
+  dataMode: DataMode;
+  disclosure: string;
+  match: MatchCatalogEntry;
+  replay: null;
+  events: EventRecord[];
+}
+
+export interface VerifyAnchorResponse {
+  schema: "proofline.verify-anchor.v1";
+  mode: "delayed";
+  dataMode: "delayed";
+  matchId: string;
+  eventId: string;
+  evidenceRoot: `0x${string}`;
+  verification: VerificationResult;
+  anchor: AnchorRecord;
+  decision: SettlementDecision;
+  dataSemantics: {
+    dataMode: DataMode;
+    captureMethod: string;
+    capturedAt: string;
+    ageSeconds: number;
+    freshnessStatus: string;
+    isFresh: boolean;
+    isCurrent: boolean;
+    supersededBy: string | null;
+    disclosure: string;
+  };
+  disclosure: string;
 }
 
 export interface McpRuntimeResponse {
@@ -291,6 +347,9 @@ export interface ProofPacketResponse {
     observations: EventObservation[];
     evidenceRoot?: `0x${string}`;
     issuerAddress?: `0x${string}`;
+    issuerKeyId: `0x${string}`;
+    issuerPolicyVersion: "proofline.issuer-policy.v1";
+    issuedAt: string;
     issuerSignature?: `0x${string}`;
     signatureScheme?: "eip712";
     verification: VerificationResult;
@@ -304,6 +363,20 @@ export interface ProofPacketResponse {
     frozen: true;
   };
   provenance: unknown;
+}
+
+export interface FeaturedProofSampleResponse {
+  schema: "proofline.previously-verified-sample.v2";
+  disclosure: string;
+  publishedAt: string;
+  network: "eip155:1439";
+  registry: Record<string, unknown>;
+  anchor: Record<string, unknown>;
+  x402: Record<string, unknown>;
+  proofPurchaseBinding: Record<string, unknown>;
+  packet: ProofPacketResponse["packet"];
+  noWalletRequired: true;
+  paymentExecutedByThisRequest: false;
 }
 
 export interface DecisionResponse {
@@ -336,6 +409,9 @@ export interface ProofVerificationResponse {
     trustedIssuer: boolean;
     scheme: "eip712";
     issuerAddress: `0x${string}`;
+    issuerKeyId?: `0x${string}`;
+    issuerPolicyVersion?: "proofline.issuer-policy.v1";
+    trustSource?: "current" | "history" | "untrusted";
     recoveredAddress: `0x${string}` | null;
     detail: string;
   };

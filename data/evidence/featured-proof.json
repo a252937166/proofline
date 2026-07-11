@@ -1,0 +1,232 @@
+{
+  "schema": "proofline.previously-verified-sample.v2",
+  "disclosure": "Previously purchased 2026 sample. Opening this JSON does not create a wallet signature, call the facilitator, or execute a new payment. The embedded packet is public evidence; fresh verification remains available through POST /api/proofs/verify.",
+  "publishedAt": "2026-07-11T12:51:59.710Z",
+  "network": "eip155:1439",
+  "registry": {
+    "version": "v3",
+    "address": "0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1",
+    "deploymentTransactionHash": "0xdf71a0e7fce722bfdc39b58951f6548ef07b6d06cb101aa57bc51a5566979523",
+    "sourceVerification": "fully-verified",
+    "explorerUrl": "https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1?tab=contract"
+  },
+  "anchor": {
+    "transactionHash": "0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+    "explorerUrl": "https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+    "evidenceRoot": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3",
+    "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30"
+  },
+  "x402": {
+    "price": "0.01 test USDC",
+    "amountAtomic": "10000",
+    "asset": "0x0c382e685bbeefe5d3d9c29e29e341fee8e84c5d",
+    "payer": "0x672044f1b95740e003D5E62671E6c1DE4Cc058b0",
+    "payee": "0x4595f5a3372F1ca653329140146081d309Ac2bf2",
+    "transactionHash": "0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e",
+    "explorerUrl": "https://testnet.blockscout.injective.network/tx/0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e",
+    "settledAt": "2026-07-11T12:50:45.740Z",
+    "deliveredAt": "2026-07-11T12:50:45.743Z",
+    "balanceDelta": {
+      "payer": "19.99 → 19.98 test USDC",
+      "payee": "20.01 → 20.02 test USDC"
+    }
+  },
+  "proofPurchaseBinding": {
+    "schema": "proofline.proof-purchase.v1",
+    "purchaseSignatureHash": "0xbfad2967d0546ff18c1a733cc72ae3e7521eab63371183e4c3291c26bacfba27",
+    "signedFields": [
+      "packetHash",
+      "payer",
+      "payee",
+      "amount",
+      "deadline",
+      "usdcNonce",
+      "sessionHash"
+    ],
+    "rawAuthorizationPublished": false,
+    "disclosure": "The replayable PAYMENT-SIGNATURE is deliberately not retained or published; only its hashes and settled entitlement are persisted."
+  },
+  "packet": {
+    "schema": "proofline.packet.v1",
+    "algorithm": {
+      "name": "VARA",
+      "version": "1.1.0",
+      "thresholdBps": 8200
+    },
+    "generatedAt": "2026-07-11T12:50:37.460Z",
+    "match": {
+      "id": "WC-2026-M97-FRA-MAR",
+      "competition": "FIFA World Cup 2026",
+      "season": 2026,
+      "label": "France vs Morocco",
+      "homeTeam": "France",
+      "awayTeam": "Morocco",
+      "venue": "Boston Stadium (Gillette Stadium)",
+      "startedAt": "2026-07-09T20:00:00.000Z",
+      "status": "finished",
+      "score": {
+        "home": 2,
+        "away": 0
+      },
+      "dataMode": "delayed",
+      "captureMethod": "delayed-snapshot",
+      "disclosure": "Delayed snapshot · captured after full time · not a live feed",
+      "sourceNotice": "ESPN public scoreboard + FIFA official results. Snapshot hash 0x6d3023187020be3ab573c6511a463d9fc8e7074d9176cbbf2f7aabdcb2495a3e.",
+      "capturedAt": "2026-07-11T10:38:05.000Z",
+      "supersededBy": null
+    },
+    "eventId": "final-result",
+    "observations": [
+      {
+        "id": "obs-2026-m97-result-espn",
+        "eventId": "final-result",
+        "source": {
+          "id": "espn-scoreboard",
+          "label": "ESPN public scoreboard JSON",
+          "url": "https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard?dates=20260709",
+          "tier": "licensed",
+          "reliabilityBps": 9200,
+          "independenceGroup": "espn"
+        },
+        "receivedAt": "2026-07-11T10:38:05.000Z",
+        "payload": {
+          "matchId": "WC-2026-M97-FRA-MAR",
+          "eventType": "match_end",
+          "minute": 90,
+          "period": "full-time",
+          "score": {
+            "home": 2,
+            "away": 0
+          },
+          "occurredAt": "2026-07-09T22:00:00.000Z"
+        },
+        "provenance": {
+          "provider": "espn-scoreboard",
+          "dataMode": "delayed",
+          "captureMethod": "delayed-snapshot",
+          "sourceSnapshotHash": "0xe723b02c4ccce750e1f3044a3df7618972f9595096271133c53646bc98c211ec",
+          "rawPayloadHash": "0xe723b02c4ccce750e1f3044a3df7618972f9595096271133c53646bc98c211ec",
+          "receivedAt": "2026-07-11T10:38:05.000Z",
+          "eventOccurredAt": "2026-07-09T22:00:00.000Z",
+          "eventOccurredAtBasis": "estimated",
+          "adapterVersion": "snapshot:espn-scoreboard@1.0.0",
+          "policyConfigHash": "0x735a2ff9f0f2a400c32180ce924d029c204242c34849dfc60bec7a51046f3015",
+          "verifierVersionHash": "0x995995f752e2587515a9bf36a6d14e380f3fe34e69d515e8c824478eccbbbbbf",
+          "sourceSnapshotAvailable": true,
+          "rawPayloadAvailable": true
+        }
+      },
+      {
+        "id": "obs-2026-m97-result-fifa",
+        "eventId": "final-result",
+        "source": {
+          "id": "fifa-world-cup-match-schedule",
+          "label": "FIFA official fixtures and results",
+          "url": "https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/articles/match-schedule-fixtures-results-teams-stadiums",
+          "tier": "official",
+          "reliabilityBps": 9800,
+          "independenceGroup": "fifa"
+        },
+        "receivedAt": "2026-07-11T10:38:05.000Z",
+        "payload": {
+          "matchId": "WC-2026-M97-FRA-MAR",
+          "eventType": "match_end",
+          "minute": 90,
+          "period": "full-time",
+          "score": {
+            "home": 2,
+            "away": 0
+          },
+          "occurredAt": "2026-07-09T22:00:00.000Z"
+        },
+        "provenance": {
+          "provider": "fifa-world-cup-match-schedule",
+          "dataMode": "delayed",
+          "captureMethod": "delayed-snapshot",
+          "sourceSnapshotHash": "0xbc17e20687ee0bd6d4ea639513377b105022cf9cb34038c23bf569e5047fae3f",
+          "rawPayloadHash": "0xbc17e20687ee0bd6d4ea639513377b105022cf9cb34038c23bf569e5047fae3f",
+          "receivedAt": "2026-07-11T10:38:05.000Z",
+          "eventOccurredAt": "2026-07-09T22:00:00.000Z",
+          "eventOccurredAtBasis": "estimated",
+          "adapterVersion": "snapshot:fifa-world-cup-match-schedule@1.0.0",
+          "policyConfigHash": "0x735a2ff9f0f2a400c32180ce924d029c204242c34849dfc60bec7a51046f3015",
+          "verifierVersionHash": "0x995995f752e2587515a9bf36a6d14e380f3fe34e69d515e8c824478eccbbbbbf",
+          "sourceSnapshotAvailable": true,
+          "rawPayloadAvailable": true
+        }
+      }
+    ],
+    "evidenceRoot": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3",
+    "issuerAddress": "0xa1a62687df6A60DB9738d424b988A3DA8d029c65",
+    "issuerKeyId": "0x43e469f7b56cb4b2bd72d9838f453c7a3dac3af142de94958733d8960f0e63ac",
+    "issuerPolicyVersion": "proofline.issuer-policy.v1",
+    "issuedAt": "2026-07-11T12:50:37.460Z",
+    "verification": {
+      "eventId": "final-result",
+      "canonical": {
+        "matchId": "WC-2026-M97-FRA-MAR",
+        "eventType": "match_end",
+        "minute": 90,
+        "period": "full-time",
+        "score": {
+          "home": 2,
+          "away": 0
+        },
+        "occurredAt": "2026-07-09T22:00:00.000Z",
+        "canonicalJson": "{\"schema\":\"proofline.event.v1\",\"matchId\":\"wc-2026-m97-fra-mar\",\"eventType\":\"match_end\",\"minute\":90,\"stoppage\":null,\"period\":\"full-time\",\"team\":null,\"player\":null,\"relatedPlayer\":null,\"card\":null,\"score\":{\"home\":2,\"away\":0,\"homePenalties\":null,\"awayPenalties\":null},\"occurredAt\":\"2026-07-09T22:00:00.000Z\"}",
+        "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30"
+      },
+      "state": "verified",
+      "confidenceBps": 9825,
+      "evidenceScore": 98.25,
+      "confidenceLabel": "98.3/100",
+      "thresholdBps": 8200,
+      "thresholdScore": 82,
+      "agreeingObservationIds": [
+        "obs-2026-m97-result-espn",
+        "obs-2026-m97-result-fifa"
+      ],
+      "agreeingSourceGroups": [
+        "espn",
+        "fifa"
+      ],
+      "activeObservationCount": 2,
+      "activeSourceGroupCount": 2,
+      "conflicts": [],
+      "breakdown": {
+        "reliabilityBps": 9500,
+        "quorumBps": 10000,
+        "agreementBps": 10000,
+        "freshnessBps": 10000,
+        "conflictPenaltyBps": 0
+      },
+      "reasons": [
+        "Independent sources agree and the confidence threshold is satisfied."
+      ],
+      "verifiedAt": "2026-07-11T10:38:05.000Z"
+    },
+    "anchor": {
+      "mode": "injective-testnet",
+      "eventHash": "0x8837f43f315336c660ec19791c4a374e7eacdd7ff9d66c546247bbeb89035b30",
+      "evidenceRoot": "0xe048362103ce6c4f07d95e1a0ebdd81b7b9b9332943d4af978cdde71b62661b3",
+      "confidenceBps": 9825,
+      "anchoredAt": "2026-07-11T12:50:04.000Z",
+      "confirmed": true,
+      "txHash": "0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+      "blockNumber": "133197482",
+      "contractAddress": "0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1",
+      "explorerUrl": "https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344",
+      "receiptIndexing": "explorer-api-and-rpc-state"
+    },
+    "settlement": {
+      "allowed": true,
+      "state": "open",
+      "reasons": [
+        "Result is final, verified, and anchored."
+      ]
+    },
+    "packetHash": "0xb8a16fdf1d5b4b282561ccd508671704ccc7f96540b6978a93eb3aa0a5f1be99",
+    "issuerSignature": "0x06ee6b514f77e3d2c3b714122e698ba25f00dfff842e52c383442de7212c07980389b677d1839c13016db9db175fa2896ceea6379f98dcca1b726cd312d7a5bf1c",
+    "signatureScheme": "eip712"
+  }
+}

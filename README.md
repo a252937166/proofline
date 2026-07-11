@@ -13,7 +13,8 @@ path: provenance, independence groups, disagreement, Evidence Score inputs,
 canonical event JSON, payment boundary, and on-chain commitment.
 
 **Hosted demo:** [proofline.axiqo.xyz](https://proofline.axiqo.xyz) ·
-**GitHub:** [a252937166/proofline](https://github.com/a252937166/proofline)
+**GitHub:** [a252937166/proofline](https://github.com/a252937166/proofline) ·
+**Immutable release:** [`global-cup-final`](https://github.com/a252937166/proofline/releases/tag/global-cup-final)
 
 ## Public Injective testnet proof
 
@@ -22,19 +23,23 @@ The complete paid-proof path was executed on Injective EVM testnet
 
 | Evidence | Public result |
 | --- | --- |
-| Verified registry | [`0x959538bE97f6Fc3A09C823514acC176681155A7e`](https://testnet.blockscout.injective.network/address/0x959538bE97f6Fc3A09C823514acC176681155A7e) — source **fully verified**, Solidity `0.8.35` |
-| Deploy | [`0x87bf…286fc`](https://testnet.blockscout.injective.network/tx/0x87bf72e57d0c6c2768a9fae0177209cfd06d3d3b2c29b12986b350352f9286fc) |
-| Grant anchorer role | [`0x7270…748b3`](https://testnet.blockscout.injective.network/tx/0x72704feff656f75de591da4ee624333294509b76beaba1b4925109096bd748b3) |
-| Anchor `WC-2022-WAL-IRN` final result | [`0x455e…c6038`](https://testnet.blockscout.injective.network/tx/0x455e933b149e8f291d41f5e5fc58fdca55fdb56c7cfd3a9e1b2f55d32f6c6038) |
-| x402 settlement, `0.01` test USDC | [`0x7970…624a`](https://testnet.blockscout.injective.network/tx/0x79700fa00ff0d0c7a5821608f6221c7805b2feb3fe72133d526b491c41fe624a) |
+| Registry v3 | [`0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1`](https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1?tab=contract) — source **fully verified**, Solidity `0.8.35` |
+| Deploy | [`0xdf71…9523`](https://testnet.blockscout.injective.network/tx/0xdf71a0e7fce722bfdc39b58951f6548ef07b6d06cb101aa57bc51a5566979523) |
+| Grant anchorer role | [`0x5858…acb4`](https://testnet.blockscout.injective.network/tx/0x58587a0d751248b714a6232cc75618762e02ff355aba00fa28d79216f252acb4) |
+| Anchor `WC-2026-M97-FRA-MAR` final result | [`0x24cd…7344`](https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344) |
+| x402 settlement, `0.01` test USDC | [`0x2923…842e`](https://testnet.blockscout.injective.network/tx/0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e) |
 
-The x402 receipt moved the payer from `20.00` to `19.99` test USDC and the
-payee from `20.00` to `20.01`. The sanitized, machine-readable run is committed
-as [real-e2e-2026-07-11.json](evidence/testnet/real-e2e-2026-07-11.json).
+This 2026 purchase moved the payer from `19.99` to `19.98` test USDC and the
+payee from `20.01` to `20.02`. The complete public packet, issuer signature,
+anchor, purchase-binding hash, and receipt are available as the
+[no-wallet featured sample](data/evidence/featured-proof.json).
 
 ## The judge moment
 
-Run the included historical replay of **Wales 0–2 IR Iran (25 Nov 2022)**. A
+The default case is the real 2026 delayed result **France 2–0 Morocco**. Its
+ESPN and FIFA observations converge into evidence root
+`0xe048…61b3`, which is anchored and sold through the real testnet path above.
+Then run the secondary historical replay of **Wales 0–2 IR Iran (25 Nov 2022)**. A
 synthetic lagging feed changes Wayne Hennessey’s 86th-minute red card to yellow.
 Proofline immediately pulls the Evidence Score back, marks the event `contested`, and
 keeps settlement held. When the official corroboration arrives and the bad
@@ -49,8 +54,8 @@ The product also exposes two honest 2026 data modes. `WC-2026-M97-FRA-MAR` is
 a delayed, post-match France 2–0 Morocco snapshot with ESPN and FIFA provenance.
 `WC-2026-M99-NOR-ENG` and `WC-2026-M100-ARG-SUI` are scheduled fixtures with
 `score=null`; they are never presented as live matches. The deterministic 2022
-replay remains the judge path because it can reproduce a source conflict on
-demand.
+replay remains the reproducible conflict-control path, while the 2026 result is
+the primary proof, anchor, x402, and fresh-verification path.
 
 ## End-to-end product
 
@@ -93,12 +98,14 @@ npm run dev
 ```
 
 Open [http://localhost:5173](http://localhost:5173). The API listens on
-`http://localhost:8787`. The default configuration is intentionally a no-key,
-no-wallet sandbox: it runs the complete conflict replay, emits a real HTTP 402
-negotiation shape, and produces an explicitly labelled deterministic demo
-receipt. It never claims that sandbox payment or anchoring happened on-chain.
+`http://localhost:8787`. The page opens on the 2026 France–Morocco delayed
+snapshot and exposes its two source lanes without claiming a live feed. The
+default configuration is intentionally a no-key, no-wallet sandbox: the
+secondary 2022 conflict-control flow emits a real HTTP 402 negotiation shape
+and an explicitly labelled deterministic demo receipt. It never claims that
+sandbox payment or anchoring happened on-chain.
 
-### Demo script
+### Conflict replay script
 
 1. Reset the historical replay.
 2. Run it and watch the red-card event move from `observed` to `contested`.
@@ -123,10 +130,12 @@ npm run check             # typecheck + tests + production builds
 npm run compile:contract  # compile Solidity registry
 npm run wallets:create:testnet # create isolated testnet-only wallets in .env
 npm run deploy:contract   # deploy registry and atomically fill .env (broadcasts)
+npm run verify:contract:testnet # publish and verify exact compiler input
 npm run testnet:preflight # read-only registry, role, balance and x402 checks
 npm run testnet:api       # real anchor + official inline facilitator; no startup tx
 npm run anchor:testnet    # prepare replay anchor; no tx unless explicitly approved
 npm run buy:proof         # official Agent quote/sign-only; no payment by default
+npm run evidence:publish-sample # publish a settled packet without its payment signature
 npm run mcp               # start the stdio MCP server
 npm run smoke             # exercise replay, 402, packet and tamper rejection
 ```
@@ -180,6 +189,13 @@ docs/               Architecture, trust, design and judging evidence
 - Signed payments are journaled by session, packet, payer, and EIP-3009 nonce.
   Concurrent duplicates are locked, settled retries are served from cache, and
   uncertain outcomes remain pending across restarts instead of charging again.
+- A second `ProofPurchase` EIP-712 signature binds `packetHash`, payer, payee,
+  amount, deadline, USDC nonce, and browser session. The browser retains the
+  original payment header in memory only; recovery replays that exact header.
+- Frozen packet JSON and entitlement state are atomically persisted with mode
+  `0600`, so a restart cannot regenerate a different packet for a settled quote.
+- Registry v3 has one concurrency-aware writer, `appendRevision`; the shortcut
+  writer is removed and a `Final` decision is fully immutable.
 - A final result requires a finished match, threshold Evidence Score, no conflict,
   and a confirmed anchor for the same canonical hash.
 - Real testnet verification checks registry identity and the match-wide latest
@@ -229,7 +245,8 @@ Proofline's stdio MCP exposes ten narrow tools, from `list_matches` and
 repository also contains a reproducible, sanitized execution transcript from
 the official Injective MCP at pinned commit
 `f5af39367975872a85b5447cefc9a197f2e635ea`: it listed 37 tools and successfully
-executed `address_normalize` and `usdc_native_info` on testnet. See
+executed `address_normalize`, `usdc_native_info`, and `account_balances` on
+testnet; the balance call reports the payer's real testnet holdings. See
 [evidence/agent/official-injective-mcp.json](evidence/agent/official-injective-mcp.json)
 and [the capture script](scripts/capture-official-injective-mcp.ts). A second
 transcript records five real calls through Proofline's own ten-tool MCP,
