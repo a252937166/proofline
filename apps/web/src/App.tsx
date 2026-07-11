@@ -433,7 +433,7 @@ function SettlementGate({ decision, anchor, onchainVerified, openProof }: {
         <p>{safeToSettle ? "Evidence, paid packet, and a fresh Injective registry lookup all passed." : policyOnly ? "Evidence policy cleared, but the paid packet and fresh registry check are not complete." : decision.reasons[0]}</p>
       </div>
       <div className="gate-status"><span>{safeToSettle ? "OPEN" : policyOnly ? "PENDING" : "HELD"}</span><small>{onchainVerified ? "Registry verified" : anchor?.receipt.mode === "demo" ? "Demo commitment only" : anchor?.receipt.confirmed ? "Fresh lookup required" : "Anchor required"}</small></div>
-      <button type="button" className="proof-button" onClick={openProof}>Inspect x402 + chain proof <Icon name="arrow" /></button>
+      <button type="button" className="proof-button" onClick={openProof} data-testid="open-proof-drawer">Inspect x402 + chain proof <Icon name="arrow" /></button>
     </section>
   );
 }
@@ -821,7 +821,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
           <span className={status === "paid" ? "complete" : ""}><i>3</i><b>Report</b><small>Verify hash</small></span>
         </div>
 
-        {status === "idle" && <div className="drawer-action"><p>Request the paid route without a signature to inspect its exact price, asset, network, and payee.</p><button type="button" className="amber-button" onClick={() => void requestQuote()}>Request proof report <Icon name="arrow" /></button></div>}
+        {status === "idle" && <div className="drawer-action"><p>Request the paid route without a signature to inspect its exact price, asset, network, and payee.</p><button type="button" className="amber-button" onClick={() => void requestQuote()} data-testid="request-proof-report">Request proof report <Icon name="arrow" /></button></div>}
         {status === "quoting" && <div className="drawer-loading"><span /><p>Negotiating x402 terms…</p></div>}
 
         {quote && (
@@ -834,7 +834,7 @@ function ProofDrawer({ open, matchId, eventId, integrations, onClose, onProof, o
               <div><dt>Pay to</dt><dd><code>{truncate(getQuoteDetail(quote, "payTo"), 9, 7)}</code></dd></div>
               <div><dt>Header</dt><dd><code>PAYMENT-SIGNATURE</code></dd></div>
             </dl>
-            {(status === "quoted" || status === "paying" || status === "error") && <button type="button" className="amber-button" onClick={() => void purchase()} disabled={status === "paying"}>{status === "paying" ? (isSandbox ? "Settling sandbox receipt…" : "Waiting for wallet signature…") : isSandbox ? "Run sandbox settlement" : "Connect wallet & sign test USDC"}<Icon name="arrow" /></button>}
+            {(status === "quoted" || status === "paying" || status === "error") && <button type="button" className="amber-button" onClick={() => void purchase()} disabled={status === "paying"} data-testid="submit-proof-payment">{status === "paying" ? (isSandbox ? "Settling sandbox receipt…" : "Waiting for wallet signature…") : isSandbox ? "Run sandbox settlement" : "Connect wallet & sign test USDC"}<Icon name="arrow" /></button>}
           </section>
         )}
 
