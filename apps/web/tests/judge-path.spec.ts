@@ -6,6 +6,7 @@ const EVENT_HASH = `0x${"11".repeat(32)}`;
 const FINAL_EVENT_HASH = `0x${"12".repeat(32)}`;
 const PACKET_HASH = `0x${"22".repeat(32)}`;
 const TX_HASH = `0x${"33".repeat(32)}`;
+const CLAIM_TX_HASH = `0x${"77".repeat(32)}`;
 
 const match = {
   id: MATCH_ID,
@@ -179,7 +180,7 @@ function snapshot(cursor: number, anchorMode: "demo" | "injective-testnet" = "de
   };
 }
 
-function integrations(live = false) {
+function integrations(live = false, dispenserEnabled = false) {
   return {
     schema: "proofline.integrations.v1",
     dataMode: { active: "historical-replay", disclosure: "Recorded evidence, not live." },
@@ -208,6 +209,20 @@ function integrations(live = false) {
       paymentHeader: "PAYMENT-SIGNATURE",
       disclosure: live ? "Testnet settlement." : "Sandbox only.",
     },
+    ...(dispenserEnabled ? {
+      testUsdcDispenser: {
+        mode: "enabled",
+        status: "configured-unverified",
+        configured: true,
+        network: "eip155:1439",
+        chainId: 1439,
+        asset: { symbol: "USDC", address: "0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d", decimals: 6 },
+        amountAtomic: "20000",
+        amountDisplay: "0.02 test USDC",
+        limits: { addressWindowHours: 24, ipClaimsPerWindow: 5, globalClaimsPerWindow: 50 },
+        disclosure: "Rate-limited Injective testnet funding for the judge path.",
+      },
+    } : {}),
     cctp: { executable: false, disclosure: "Future work." },
   };
 }
@@ -239,7 +254,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200, headers: R
   await route.fulfill({ status, contentType: "application/json", headers, body: JSON.stringify(body) });
 }
 
-async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFailure?: boolean; paymentPendingConflict?: boolean; recoverSettled?: boolean; verificationNegative?: boolean; verificationMinimal422?: boolean; anchorMode?: "demo" | "injective-testnet"; sessionHeaders?: string[]; paymentHeaders?: string[]; proofRequests?: string[]; recoveryRequests?: string[] } = {}) {
+async function mockApi(page: Page, options: { live?: boolean; dispenserEnabled?: boolean; paymentNetworkFailure?: boolean; paymentPendingConflict?: boolean; recoverSettled?: boolean; verificationNegative?: boolean; verificationMinimal422?: boolean; anchorMode?: "demo" | "injective-testnet"; sessionHeaders?: string[]; paymentHeaders?: string[]; proofRequests?: string[]; recoveryRequests?: string[]; verificationPackets?: Array<{ eventId: string; packetHash: string }>; claimRequests?: string[] } = {}) {
   let cursor = 0;
   let paymentFailureInjected = false;
   await page.route("**/api/**", async (route) => {
@@ -255,7 +270,29 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
       return;
     }
     if (url.pathname.endsWith("/integrations")) {
-      await fulfillJson(route, integrations(options.live));
+      await fulfillJson(route, integrations(options.live, options.dispenserEnabled));
+      return;
+    }
+    if (url.pathname.endsWith("/testnet-usdc/claims")) {
+      const body = request.postDataJSON() as { recipient: string };
+      options.claimRequests?.push(body.recipient);
+      const now = new Date().toISOString();
+      await fulfillJson(route, {
+        schema: "proofline.test-usdc-claim.v1",
+        status: "confirmed",
+        network: "eip155:1439",
+        chainId: 1439,
+        asset: { symbol: "USDC", address: "0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d", decimals: 6 },
+        recipient: body.recipient,
+        amountAtomic: "20000",
+        amountDisplay: "0.02 test USDC",
+        transactionHash: CLAIM_TX_HASH,
+        explorerUrl: `https://testnet.blockscout.injective.network/tx/${CLAIM_TX_HASH}`,
+        requestedAt: now,
+        submittedAt: now,
+        confirmedAt: now,
+        nextEligibleAt: "2026-07-13T12:00:00.000Z",
+      });
       return;
     }
     if (url.pathname.endsWith("/mcp/runtime")) {
@@ -478,11 +515,16 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
         }, 422);
         return;
       }
-      const body = request.postDataJSON() as { packet: { eventId: string } };
-      const valid = !options.verificationNegative && !body.packet.eventId.endsWith("-tampered");
+      const body = request.postDataJSON() as { packet: { eventId: string; packetHash: string } };
+      options.verificationPackets?.push({
+        eventId: body.packet.eventId,
+        packetHash: body.packet.packetHash,
+      });
+      const packetHashMatches = body.packet.packetHash.toLowerCase() === PACKET_HASH.toLowerCase();
+      const valid = !options.verificationNegative && packetHashMatches;
       await fulfillJson(route, {
         valid,
-        packetHash: PACKET_HASH,
+        packetHash: body.packet.packetHash,
         recomputedPacketHash: valid ? PACKET_HASH : `0x${"55".repeat(32)}`,
         checkedAt: new Date().toISOString(),
         checks: [
@@ -598,6 +640,7 @@ type MockWalletOptions = {
   names?: string[];
   account?: string;
   balanceAtomic?: string;
+  balanceAtomicSequence?: string[];
   rejectSignature?: 1 | 2;
 };
 
@@ -607,7 +650,7 @@ type MockWalletOptions = {
  * legacy window.ethereum global after React has already selected a provider.
  */
 async function installEip6963Wallets(page: Page, options: MockWalletOptions = {}) {
-  await page.addInitScript(({ names, account, balanceAtomic, rejectSignature }) => {
+  await page.addInitScript(({ names, account, balanceAtomic, balanceAtomicSequence, rejectSignature }) => {
     type Listener = (...args: unknown[]) => void;
     type Provider = {
       request(args: { method: string; params?: readonly unknown[] | Record<string, unknown> }): Promise<unknown>;
@@ -624,6 +667,7 @@ async function installEip6963Wallets(page: Page, options: MockWalletOptions = {}
     const target = window as InstrumentedWindow;
     const methods: string[] = [];
     const primaryTypes: string[] = [];
+    let balanceReadCount = 0;
     target.__prooflineWalletMethods = methods;
     target.__prooflinePrimaryTypes = primaryTypes;
 
@@ -638,7 +682,12 @@ async function installEip6963Wallets(page: Page, options: MockWalletOptions = {}
             return [account];
           }
           if (method === "eth_chainId") return "0x59f";
-          if (method === "eth_call") return `0x${BigInt(balanceAtomic).toString(16)}`;
+          if (method === "eth_call") {
+            const balances = balanceAtomicSequence.length ? balanceAtomicSequence : [balanceAtomic];
+            const balance = balances[Math.min(balanceReadCount, balances.length - 1)]!;
+            balanceReadCount += 1;
+            return `0x${BigInt(balance).toString(16)}`;
+          }
           if (method === "wallet_switchEthereumChain" || method === "wallet_addEthereumChain") return null;
           if (method === "wallet_watchAsset") return true;
           if (method === "eth_signTypedData_v4") {
@@ -684,6 +733,7 @@ async function installEip6963Wallets(page: Page, options: MockWalletOptions = {}
     names: options.names ?? ["Orbit Vault", "Nebula Key"],
     account: options.account ?? "0x3333333333333333333333333333333333333333",
     balanceAtomic: options.balanceAtomic ?? "5000000",
+    balanceAtomicSequence: options.balanceAtomicSequence ?? [],
     rejectSignature: options.rejectSignature ?? null,
   });
 }
@@ -728,6 +778,47 @@ test.describe("judge-first wallet workspace", () => {
     await expect(page.locator("body")).not.toContainText(/OKX|MetaMask/i);
   });
 
+  test("low-balance judge can claim 0.02 test USDC and continue when preflight becomes ready", async ({ page }) => {
+    const account = "0x3333333333333333333333333333333333333333";
+    const claimRequests: string[] = [];
+    await installEip6963Wallets(page, {
+      names: ["Orbit Vault", "Nebula Key"],
+      account,
+      balanceAtomicSequence: ["0", "0", "20000"],
+    });
+    await mockApi(page, {
+      live: true,
+      dispenserEnabled: true,
+      anchorMode: "injective-testnet",
+      claimRequests,
+    });
+    await page.goto("/");
+    await expect(page).toHaveURL(/experience=wallet/);
+
+    await connectNamedWallet(page, "Orbit Vault");
+    await page.getByTestId("wallet-trigger").click();
+    const dialog = page.getByRole("dialog", { name: "Wallet preflight" });
+    await expect(dialog.getByRole("heading", { name: "Get 0.02 test USDC" })).toBeVisible();
+
+    const claimButton = page.getByTestId("claim-test-usdc");
+    await expect(claimButton).toHaveText("Get 0.02 test USDC");
+    await claimButton.click();
+    const receipt = dialog.getByRole("link", { name: "Open claim transaction" });
+    await expect(receipt).toHaveAttribute(
+      "href",
+      `https://testnet.blockscout.injective.network/tx/${CLAIM_TX_HASH}`,
+    );
+    expect(claimRequests).toEqual([account]);
+
+    await expect(dialog.getByText("Ready for testnet payment", { exact: true })).toBeVisible({ timeout: 10_000 });
+    await expect(dialog).toContainText("0.02 test USDC is available");
+    const continueButton = page.getByTestId("continue-to-proof-review");
+    await expect(continueButton).toBeVisible();
+    await continueButton.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByTestId("request-proof-report")).toBeFocused();
+  });
+
   test("uses a branded, keyboard-accessible evidence case menu instead of a native select", async ({ page }) => {
     await mockApi(page, { live: true });
     await page.goto("/");
@@ -757,11 +848,13 @@ test.describe("judge-first wallet workspace", () => {
 
   test("wallet → review → signature 1 → signature 2 → three-layer verification", async ({ page }) => {
     const paymentHeaders: string[] = [];
+    const verificationPackets: Array<{ eventId: string; packetHash: string }> = [];
     await installEip6963Wallets(page, { names: ["Orbit Vault", "Nebula Key"] });
     await mockApi(page, {
       live: true,
       anchorMode: "injective-testnet",
       paymentHeaders,
+      verificationPackets,
     });
     await page.goto("/");
 
@@ -805,6 +898,15 @@ test.describe("judge-first wallet workspace", () => {
     await expect(page.locator(".verification-layers")).toContainText("Issuer signature");
     await expect(page.locator(".verification-layers")).toContainText("On-chain commitment");
     await expect(page.getByText("Integrity + issuer + Registry v3 passed", { exact: true })).toBeVisible();
+    expect(paymentHeaders).toHaveLength(1);
+
+    const tamperControl = page.getByTestId("tamper-control");
+    await tamperControl.click();
+    await expect(tamperControl).toContainText("Tampered packet rejected · PASS");
+    expect(verificationPackets).toHaveLength(2);
+    expect(verificationPackets[0]).toEqual({ eventId: "final-result", packetHash: PACKET_HASH });
+    expect(verificationPackets[1]?.eventId).toBe("final-result");
+    expect(verificationPackets[1]?.packetHash).not.toBe(PACKET_HASH);
     expect(paymentHeaders).toHaveLength(1);
 
     const telemetry = await page.evaluate(() => ({
@@ -860,6 +962,40 @@ test.describe("judge-first wallet workspace", () => {
     await expect(page).toHaveURL(/experience=wallet/);
   });
 
+  test("experience tabs expose only the mounted panel and support Home/End navigation", async ({ page }) => {
+    await mockApi(page, { live: true });
+    await page.goto("/");
+
+    const walletTab = page.getByTestId("experience-wallet");
+    const auditTab = page.getByTestId("experience-audit");
+    const replayTab = page.getByTestId("experience-replay");
+
+    await expect(walletTab).toHaveAttribute("aria-selected", "true");
+    await expect(walletTab).toHaveAttribute("aria-controls", "experience-panel-wallet");
+    await expect(page.locator("#experience-panel-wallet")).toHaveAttribute("role", "tabpanel");
+    await expect(page.locator("#experience-panel-wallet")).toHaveAttribute("aria-labelledby", "experience-tab-wallet");
+    await expect(auditTab).not.toHaveAttribute("aria-controls", /.+/);
+    await expect(replayTab).not.toHaveAttribute("aria-controls", /.+/);
+
+    await walletTab.focus();
+    await walletTab.press("End");
+    await expect(replayTab).toBeFocused();
+    await expect(replayTab).toHaveAttribute("aria-selected", "true");
+    await expect(replayTab).toHaveAttribute("aria-controls", "experience-panel-replay");
+    await expect(page.locator("#experience-panel-replay")).toHaveAttribute("role", "tabpanel");
+    await expect(page.locator("#experience-panel-replay")).toHaveAttribute("aria-labelledby", "experience-tab-replay");
+    await expect(walletTab).not.toHaveAttribute("aria-controls", /.+/);
+    await expect(auditTab).not.toHaveAttribute("aria-controls", /.+/);
+
+    await replayTab.press("Home");
+    await expect(walletTab).toBeFocused();
+    await expect(walletTab).toHaveAttribute("aria-selected", "true");
+    await expect(walletTab).toHaveAttribute("aria-controls", "experience-panel-wallet");
+    await expect(page.locator("#experience-panel-wallet")).toHaveAttribute("aria-labelledby", "experience-tab-wallet");
+    await expect(auditTab).not.toHaveAttribute("aria-controls", /.+/);
+    await expect(replayTab).not.toHaveAttribute("aria-controls", /.+/);
+  });
+
   test("390px layout has no horizontal overflow and keeps the next action touch-safe", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await mockApi(page, { live: true });
@@ -880,19 +1016,22 @@ test.describe("judge-first wallet workspace", () => {
             right: Math.round(elementRect.right * 10) / 10,
             clientWidth: element.clientWidth,
             scrollWidth: element.scrollWidth,
+            rendered: elementRect.width > 0 && elementRect.height > 0,
+            allowlisted: element.matches(".sr-only, [data-allow-overflow='ellipsis']"),
           };
         })
-        .filter((entry) => entry.left < -0.5 || entry.right > viewportWidth + 0.5 || entry.scrollWidth > entry.clientWidth + 1)
-        .slice(0, 12);
+        .filter((entry) => entry.rendered && (entry.left < -0.5 || entry.right > viewportWidth + 0.5 || entry.scrollWidth > entry.clientWidth + 1));
       return {
         documentWidth: document.documentElement.scrollWidth,
         viewportWidth,
         actionHeight: rect?.height ?? 0,
         actionWidth: rect?.width ?? 0,
-        overflowSources,
+        allowlistedOverflowSources: overflowSources.filter((entry) => entry.allowlisted),
+        unexpectedOverflowSources: overflowSources.filter((entry) => !entry.allowlisted).slice(0, 12),
       };
     });
-    expect(metrics.documentWidth, `Horizontal overflow sources: ${JSON.stringify(metrics.overflowSources)}`).toBeLessThanOrEqual(metrics.viewportWidth);
+    expect(metrics.documentWidth, `Unexpected horizontal overflow sources: ${JSON.stringify(metrics.unexpectedOverflowSources)}`).toBeLessThanOrEqual(metrics.viewportWidth);
+    expect(metrics.unexpectedOverflowSources, `Only .sr-only and [data-allow-overflow="ellipsis"] may overflow internally. Allowlisted: ${JSON.stringify(metrics.allowlistedOverflowSources)}`).toEqual([]);
     expect(metrics.actionHeight).toBeGreaterThanOrEqual(44);
     expect(metrics.actionWidth).toBeGreaterThanOrEqual(44);
   });

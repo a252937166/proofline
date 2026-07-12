@@ -41,6 +41,7 @@ import type {
   ProofVerificationResponse,
   ReplaySnapshot,
   SettlementDecision,
+  TestUsdcClaimResponse,
   VerificationResult,
 } from "./types";
 
@@ -236,17 +237,97 @@ function WalletProviderIcon({ provider, size = 28 }: {
   );
 }
 
-function WalletControl({ wallet, open, onOpen, onClose }: {
+function WalletControl({ wallet, integrations, open, locked = false, onOpen, onClose, onContinueToProof }: {
   wallet: UseWalletResult;
+  integrations: IntegrationsResponse | null;
   open: boolean;
+  locked?: boolean;
   onOpen: () => void;
   onClose: () => void;
+  onContinueToProof: () => void;
 }) {
   const [copied, setCopied] = useState(false);
+  const [claimState, setClaimState] = useState<"idle" | "requesting" | "submitted" | "confirmed" | "error">("idle");
+  const [claimResult, setClaimResult] = useState<TestUsdcClaimResponse | null>(null);
+  const [claimMessage, setClaimMessage] = useState<string | null>(null);
+  const claimEpoch = useRef(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLElement>(null);
   const connected = Boolean(wallet.account && wallet.selectedProvider);
   const walletName = wallet.selectedProvider?.info.name ?? "Compatible wallet";
+  const dispenser = integrations?.testUsdcDispenser;
+  const dispenserReady = Boolean(
+    dispenser?.mode === "enabled" &&
+    dispenser.configured &&
+    dispenser.status !== "misconfigured",
+  );
+  const proofPriceAtomic = (() => {
+    try {
+      return BigInt(integrations?.x402.priceAtomic ?? "10000");
+    } catch {
+      return 10_000n;
+    }
+  })();
+  useEffect(() => {
+    claimEpoch.current += 1;
+    setClaimState("idle");
+    setClaimResult(null);
+    setClaimMessage(null);
+  }, [wallet.account]);
+  useEffect(() => () => {
+    claimEpoch.current += 1;
+  }, []);
+  const requestTestUsdc = async () => {
+    if (!wallet.account || !dispenserReady || locked || claimState === "requesting") return;
+    const epoch = claimEpoch.current + 1;
+    claimEpoch.current = epoch;
+    setClaimState("requesting");
+    setClaimResult(null);
+    setClaimMessage("Submitting one rate-limited 0.02 test USDC claim…");
+    try {
+      const claim = await api.claimTestUsdc(wallet.account);
+      if (claimEpoch.current !== epoch) return;
+      setClaimResult(claim);
+      setClaimState(claim.status);
+      setClaimMessage(claim.status === "confirmed"
+        ? "Claim confirmed. Refreshing the connected wallet balance…"
+        : "Claim submitted on Injective EVM Testnet. Waiting for the balance to update…");
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        if (attempt > 0) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 2_000));
+        }
+        if (claimEpoch.current !== epoch) return;
+        const balance = await wallet.refresh();
+        if (claimEpoch.current !== epoch) return;
+        if (balance !== null && balance >= proofPriceAtomic) {
+          setClaimState("confirmed");
+          setClaimMessage(`${formatTestUsdc(balance)} is now available. Continue to proof review.`);
+          return;
+        }
+      }
+      if (claimEpoch.current === epoch) {
+        setClaimState("submitted");
+        setClaimMessage("The transfer is on-chain, but this wallet balance has not refreshed yet. Open the receipt or refresh preflight in a moment.");
+      }
+    } catch (cause) {
+      if (claimEpoch.current !== epoch) return;
+      const body = cause instanceof ApiError && cause.body && typeof cause.body === "object"
+        ? cause.body as Record<string, unknown>
+        : null;
+      const code = typeof body?.error === "string" ? body.error : "";
+      if (code === "already_funded") {
+        const balance = await wallet.refresh();
+        if (claimEpoch.current !== epoch) return;
+        setClaimState(balance !== null && balance >= proofPriceAtomic ? "confirmed" : "error");
+        setClaimMessage(balance !== null && balance >= proofPriceAtomic
+          ? `${formatTestUsdc(balance)} is already available. Continue to proof review.`
+          : "The dispenser reports this address is already funded, but the wallet balance could not be confirmed. Refresh preflight or inspect the address on Blockscout.");
+        return;
+      }
+      setClaimState("error");
+      setClaimMessage(cause instanceof Error ? cause.message : "The test USDC claim could not be submitted.");
+    }
+  };
   useEffect(() => {
     if (!open) return;
     const dialog = dialogRef.current;
@@ -322,17 +403,45 @@ function WalletControl({ wallet, open, onOpen, onClose }: {
                   <div><dt>Payment mode</dt><dd>Signed authorization · no wallet broadcast</dd></div>
                 </dl>
                 {wallet.error && <p className="wallet-inline-error" role="alert">{wallet.error}</p>}
+                {locked && <p className="wallet-flow-lock" role="status"><Icon name="shield" size={15} /> Payment workflow in progress. This payer is frozen for the current proof; wallet-changing actions are temporarily read-only.</p>}
+                {!locked && wallet.status === "ready" && (
+                  <section className="wallet-ready-callout" role="status">
+                    <span><Icon name="check" size={16} /> Ready for testnet payment</span>
+                    <p>{formatTestUsdc(wallet.usdcBalance)} is available. The next step freezes the proof and shows the exact 402 terms before either signature.</p>
+                    {claimResult && <a className="claim-receipt-link" href={claimResult.explorerUrl} target="_blank" rel="noreferrer">Funding receipt · {truncate(claimResult.transactionHash, 9, 7)} <Icon name="external" size={13} /></a>}
+                    <button type="button" className="wallet-primary" onClick={onContinueToProof} data-testid="continue-to-proof-review">Continue to proof review <Icon name="arrow" size={16} /></button>
+                  </section>
+                )}
+                {!locked && wallet.status === "low-balance" && (
+                  <section className="wallet-funding-callout" aria-live="polite">
+                    <p className="eyebrow">Testnet funding</p>
+                    <h3>Get 0.02 test USDC</h3>
+                    <p>This account has <strong>{formatTestUsdc(wallet.usdcBalance)}</strong>; the proof costs 0.01. The project dispenser sends test tokens only, once per address every {dispenser?.limits.addressWindowHours ?? 24} hours.</p>
+                    <button type="button" className="wallet-primary" onClick={() => void requestTestUsdc()} disabled={!dispenserReady || claimState === "requesting"} data-testid="claim-test-usdc">
+                      {claimState === "requesting" ? "Submitting claim…" : dispenserReady ? "Get 0.02 test USDC" : "Test USDC dispenser unavailable"}
+                    </button>
+                    {claimMessage && <small className={`claim-message is-${claimState}`}>{claimMessage}</small>}
+                    {claimResult && <a className="claim-receipt-link" href={claimResult.explorerUrl} target="_blank" rel="noreferrer">Open claim transaction <Icon name="external" size={13} /></a>}
+                  </section>
+                )}
                 <div className="wallet-dialog-actions">
-                  {wallet.status === "wrong-network" && <button type="button" className="wallet-primary" onClick={() => void wallet.switchNetwork()}>Switch to Injective testnet</button>}
-                  {wallet.status === "low-balance" && <button type="button" onClick={() => void wallet.watchAsset()}>Add test USDC token</button>}
+                  {wallet.status === "wrong-network" && <button type="button" className="wallet-primary" onClick={() => void wallet.switchNetwork()} disabled={locked}>Switch to Injective testnet</button>}
                   <button type="button" onClick={() => void wallet.refresh()}>Refresh preflight</button>
                   <button type="button" onClick={() => {
                     if (!wallet.account) return;
                     void navigator.clipboard.writeText(wallet.account).then(() => setCopied(true)).catch(() => setCopied(false));
                   }}>{copied ? "Address copied" : "Copy account address"}</button>
                   <a href={`${TESTNET_EXPLORER}/address/${wallet.account}`} target="_blank" rel="noreferrer">Open explorer <Icon name="external" size={13} /></a>
-                  <button type="button" className="wallet-disconnect" onClick={() => { setCopied(false); wallet.disconnect(); }}>Choose another wallet</button>
                 </div>
+                {!locked && (
+                  <details className="wallet-more-actions">
+                    <summary>Wallet options</summary>
+                    <div>
+                      <button type="button" onClick={() => void wallet.watchAsset()}>Add test USDC token</button>
+                      <button type="button" className="wallet-disconnect" onClick={() => { setCopied(false); wallet.disconnect(); }}>Choose another wallet</button>
+                    </div>
+                  </details>
+                )}
               </div>
             ) : (
               <div className="wallet-provider-list">
@@ -342,7 +451,7 @@ function WalletControl({ wallet, open, onOpen, onClose }: {
                     type="button"
                     key={provider.id}
                     onClick={() => void wallet.connect(provider)}
-                    disabled={wallet.status === "connecting"}
+                    disabled={wallet.status === "connecting" || locked}
                     data-testid="wallet-provider-option"
                   >
                     <WalletProviderIcon provider={provider} size={38} />
@@ -354,7 +463,7 @@ function WalletControl({ wallet, open, onOpen, onClose }: {
                     <Icon name="wallet" size={28} />
                     <strong>No compatible injected wallet detected</strong>
                     <p>Install or enable an EVM wallet that supports EIP‑712 typed-data signing, then scan again.</p>
-                    <button type="button" onClick={wallet.requestDiscovery}>Scan for wallets</button>
+                    <button type="button" onClick={wallet.requestDiscovery} disabled={locked}>Scan for wallets</button>
                   </div>
                 )}
                 {wallet.error && <p className="wallet-inline-error" role="alert">{wallet.error}</p>}
@@ -368,7 +477,7 @@ function WalletControl({ wallet, open, onOpen, onClose }: {
   );
 }
 
-function AppHeader({ integrations, mode = "replay", catalog, activeMatchId, onSelectMatch, matchSelectionDisabled = false, wallet, walletDialogOpen = false, onOpenWallet, onCloseWallet }: {
+function AppHeader({ integrations, mode = "replay", catalog, activeMatchId, onSelectMatch, matchSelectionDisabled = false, wallet, walletDialogOpen = false, walletLocked = false, onOpenWallet, onCloseWallet, onContinueToProof }: {
   integrations: IntegrationsResponse | null;
   mode?: string;
   catalog?: MatchCatalogResponse | null;
@@ -377,8 +486,10 @@ function AppHeader({ integrations, mode = "replay", catalog, activeMatchId, onSe
   matchSelectionDisabled?: boolean;
   wallet?: UseWalletResult;
   walletDialogOpen?: boolean;
+  walletLocked?: boolean;
   onOpenWallet?: () => void;
   onCloseWallet?: () => void;
+  onContinueToProof?: () => void;
 }) {
   const chain = !integrations
     ? { label: "checking", tone: "checking" }
@@ -413,7 +524,7 @@ function AppHeader({ integrations, mode = "replay", catalog, activeMatchId, onSe
         <span><i className={chain.tone} />Injective {chain.label}</span>
         <span><i className={x402.tone} />x402 testnet {x402.label === "live" ? "ready" : x402.label}</span>
       </div>
-      {wallet && onOpenWallet && onCloseWallet && <WalletControl wallet={wallet} open={walletDialogOpen} onOpen={onOpenWallet} onClose={onCloseWallet} />}
+      {wallet && onOpenWallet && onCloseWallet && onContinueToProof && <WalletControl wallet={wallet} integrations={integrations} open={walletDialogOpen} locked={walletLocked} onOpen={onOpenWallet} onClose={onCloseWallet} onContinueToProof={onContinueToProof} />}
     </header>
   );
 }
@@ -874,8 +985,14 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
   const [signingStep, setSigningStep] = useState<BrowserSigningStep | null>(null);
   const [tamperResult, setTamperResult] = useState<"idle" | "running" | "passed" | "failed" | "unavailable">("idle");
   const [message, setMessage] = useState<string | null>(null);
+  const [paymentBalanceBefore, setPaymentBalanceBefore] = useState<bigint | null>(null);
+  const [paymentBalanceAfter, setPaymentBalanceAfter] = useState<bigint | null>(null);
+  const [paymentBalanceRefreshPending, setPaymentBalanceRefreshPending] = useState(false);
+  const [paymentTransferredThisRequest, setPaymentTransferredThisRequest] = useState(false);
   const closeButton = useRef<HTMLButtonElement>(null);
   const bindingButton = useRef<HTMLButtonElement>(null);
+  const recoverySection = useRef<HTMLElement>(null);
+  const proofResultSection = useRef<HTMLDivElement>(null);
   // A live PAYMENT-SIGNATURE is deliberately ephemeral: it exists only in this
   // mounted drawer and is replayed for recovery without storage or logging.
   const paymentSignatureRef = useRef<string | null>(null);
@@ -897,6 +1014,7 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
     "binding-ready",
     "binding",
     "settling",
+    "verifying",
     "recovering",
     "uncertain",
   ].includes(status);
@@ -912,6 +1030,20 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
     const frame = window.requestAnimationFrame(() => {
       bindingButton.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
       bindingButton.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, status]);
+
+  useEffect(() => {
+    if (!open) return;
+    const target = status === "uncertain" || status === "recovering"
+      ? recoverySection.current
+      : status === "paid" || status === "delivered-unverified"
+        ? proofResultSection.current
+        : null;
+    if (!target) return;
+    const frame = window.requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
     });
     return () => window.cancelAnimationFrame(frame);
   }, [open, status]);
@@ -956,6 +1088,10 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
     setPaymentNonce(null);
     setSigningStep(null);
     setTamperResult("idle");
+    setPaymentBalanceBefore(null);
+    setPaymentBalanceAfter(null);
+    setPaymentBalanceRefreshPending(false);
+    setPaymentTransferredThisRequest(false);
     setMessage(null);
     onClose();
   }, [closeLocked, onClose, status]);
@@ -1002,6 +1138,10 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
     paymentSignatureRef.current = null;
     pendingAuthorizationRef.current = null;
     setTamperResult("idle");
+    setPaymentBalanceBefore(null);
+    setPaymentBalanceAfter(null);
+    setPaymentBalanceRefreshPending(false);
+    setPaymentTransferredThisRequest(false);
     setMessage(null);
   }, [eventId, matchId, open]);
 
@@ -1028,6 +1168,13 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
     recovered = false,
   ) => {
     if (!isCurrentOperation(operation)) return;
+    const transferredThisRequest = !recovered && result.payment.valueTransferred === true;
+    setPaymentTransferredThisRequest(transferredThisRequest);
+    setPaymentBalanceRefreshPending(transferredThisRequest);
+    if (!transferredThisRequest) {
+      setPaymentBalanceBefore(null);
+      setPaymentBalanceAfter(null);
+    }
     setProof(result);
     onProof(result);
     setStatus("verifying");
@@ -1053,6 +1200,11 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
             : "Recovered the existing settled report. No wallet opened, no facilitator was called, and no payment was repeated.",
         );
       }
+      const refreshedBalance = await wallet.refresh();
+      if (isCurrentOperation(operation) && transferredThisRequest) {
+        setPaymentBalanceAfter(refreshedBalance);
+        setPaymentBalanceRefreshPending(false);
+      }
     } catch (cause) {
       if (isAbortError(cause) || !isCurrentOperation(operation)) return;
       setStatus("delivered-unverified");
@@ -1061,6 +1213,11 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
           cause instanceof Error ? cause.message : ""
         }`,
       );
+      const refreshedBalance = await wallet.refresh();
+      if (isCurrentOperation(operation) && transferredThisRequest) {
+        setPaymentBalanceAfter(refreshedBalance);
+        setPaymentBalanceRefreshPending(false);
+      }
     }
   };
 
@@ -1249,6 +1406,10 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
     const operation = beginOperation();
     setMessage(null);
     setSigningStep(null);
+    setPaymentBalanceBefore(wallet.usdcBalance);
+    setPaymentBalanceAfter(null);
+    setPaymentBalanceRefreshPending(false);
+    setPaymentTransferredThisRequest(false);
     if (!integrations) {
       setStatus("error");
       setMessage("Integration policy is not loaded; payment signing is disabled.");
@@ -1397,15 +1558,25 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
     if (!proof) return;
     const operation = beginOperation();
     setTamperResult("running");
+    setMessage(null);
     const tampered = structuredClone(proof.packet);
-    tampered.eventId = `${tampered.eventId}-tampered`;
+    const lastNibble = tampered.packetHash.at(-1)?.toLowerCase();
+    tampered.packetHash = `${tampered.packetHash.slice(0, -1)}${lastNibble === "0" ? "1" : "0"}` as `0x${string}`;
     try {
       const checked = await api.verifyProof(
         tampered,
         operation.controller.signal,
       );
       if (!isCurrentOperation(operation)) return;
-      setTamperResult(checked.valid ? "failed" : "passed");
+      const packetHashCheck = checked.checks.find((check) => check.id === "packet-hash");
+      const rejectedForChangedHash =
+        checked.valid === false &&
+        packetHashCheck?.passed === false &&
+        checked.recomputedPacketHash.toLowerCase() !== tampered.packetHash.toLowerCase();
+      setTamperResult(rejectedForChangedHash ? "passed" : "failed");
+      if (!rejectedForChangedHash) {
+        setMessage("Tamper negative control did not prove that the changed packet hash was rejected. The paid report remains available, but this control is not a PASS.");
+      }
     } catch (cause) {
       if (isAbortError(cause) || !isCurrentOperation(operation)) return;
       setTamperResult("unavailable");
@@ -1486,6 +1657,16 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
   const quotedPrice = quotedRequirement && /^\d+$/.test(quotedRequirement.amount)
     ? formatTestUsdc(BigInt(quotedRequirement.amount))
     : integrations?.x402.priceDisplay ?? "0.01 test USDC";
+  const paymentTransactionHash = proof?.entitlement?.transactionHash ?? (
+    typeof proof?.payment.transactionHash === "string"
+      ? proof.payment.transactionHash
+      : null
+  );
+  const paymentPayer = walletAccount ?? (
+    typeof proof?.payment.payer === "string"
+      ? proof.payment.payer
+      : null
+  );
 
   return (
     <div className={presentation === "overlay" ? "drawer-layer" : "proof-workflow-embedded"}>
@@ -1497,9 +1678,15 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
         </header>
         <div className="drawer-mode"><span>{isSandbox ? "SANDBOX" : livePaymentUsable ? "TESTNET ONLY" : "CONFIG REQUIRED"}</span><p>{isSandbox ? "Protocol-shaped negotiation. No value is transferred." : livePaymentUsable ? "0.01 test USDC · 2 signatures · 1 payment · 0 wallet-broadcast transactions" : "Live x402 is not ready. Proofline will fail closed before requesting a wallet signature."}</p></div>
 
-        <section className="price-ticket">
-          <span>Verification packet</span><strong>{integrations?.x402.priceDisplay ?? "0.01 USDC"}</strong><small>Spend policy cap · 10,000 atomic USDC</small>
-        </section>
+        {quote ? (
+          <section className="price-ticket">
+            <span>Verification packet</span><strong>{quotedPrice}</strong><small>Spend policy cap · 10,000 atomic USDC</small>
+          </section>
+        ) : (
+          <div className="price-summary-strip" aria-label="Proof price summary">
+            <span>Injective EVM Testnet</span><strong>{integrations?.x402.priceDisplay ?? "0.01 test USDC"}</strong>
+          </div>
+        )}
 
         <ol className="payment-flow payment-stage-rail" aria-label={`Payment stage ${flowStage} of 4`}>
           {(["Wallet", "Review", "Sign", "Verify"] as const).map((label, index) => {
@@ -1604,7 +1791,7 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
         )}
 
         {(status === "uncertain" || status === "recovering") && (
-          <section className="payment-uncertain" role="alert" data-testid="payment-uncertain">
+          <section ref={recoverySection} className="payment-uncertain" role="alert" data-testid="payment-uncertain" tabIndex={-1}>
             <p className="eyebrow">Payment uncertain · do not sign again</p>
             <h3>A wallet signature exists, but report delivery was not confirmed.</h3>
             <p>The original <code>PAYMENT-SIGNATURE</code> remains in memory only. Recovery replays that exact header; it is never written to localStorage, rendered, or logged.</p>
@@ -1618,6 +1805,20 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
         )}
 
         {proof && (
+          <div ref={proofResultSection} className="proof-result-stack" role="status" aria-live="polite" tabIndex={-1}>
+          <section className={`payment-receipt ${paymentTransferredThisRequest ? "is-fresh" : "is-recovered"}`} data-testid="payment-receipt">
+            <header>
+              <span><Icon name="receipt" /><small>{paymentTransferredThisRequest ? "Payment receipt" : "Existing paid receipt"}</small></span>
+              <strong>{paymentTransferredThisRequest ? "CONFIRMED" : "RECOVERED · NO NEW PAYMENT"}</strong>
+            </header>
+            <dl>
+              <div><dt>Amount</dt><dd>{quotedPrice}</dd></div>
+              <div><dt>Payer</dt><dd><code>{truncate(paymentPayer ?? undefined, 9, 7)}</code></dd></div>
+              <div><dt>Payee</dt><dd><code>{truncate(integrations?.x402.payTo ?? undefined, 9, 7)}</code></dd></div>
+              {paymentTransferredThisRequest && <div className="receipt-balance"><dt>Wallet balance</dt><dd><span>{paymentBalanceBefore === null ? "Not captured" : formatTestUsdc(paymentBalanceBefore)}</span><Icon name="arrow" size={14} /><strong>{paymentBalanceRefreshPending ? "Refreshing…" : paymentBalanceAfter === null ? "Refresh unavailable" : formatTestUsdc(paymentBalanceAfter)}</strong></dd></div>}
+              <div><dt>Transaction</dt><dd>{paymentTransactionHash ? <a href={`${integrations?.injective.explorerUrl ?? TESTNET_EXPLORER}/tx/${paymentTransactionHash}`} target="_blank" rel="noreferrer">{truncate(paymentTransactionHash, 10, 8)} <Icon name="external" size={12} /></a> : "Receipt hash unavailable"}</dd></div>
+            </dl>
+          </section>
           <section className="proof-packet">
             <div className="packet-seal"><Icon name="shield" /><span><strong>{isFullyVerifiedProof(verification) ? "SAFE TO SETTLE" : "Report delivered · settlement held"}</strong><small>{verification ? (isFullyVerifiedProof(verification) ? "Integrity + issuer + Registry v3 passed" : "All three independent layers have not passed") : "Running independent verification…"}</small></span></div>
             <dl>
@@ -1631,7 +1832,6 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
               <div><dt>Evidence score</dt><dd>{evidenceScore(proof.packet.verification.confidenceBps)}</dd></div>
               <div><dt>Settlement</dt><dd>{proof.packet.settlement.allowed ? "Allowed" : "Held"}</dd></div>
               {walletAccount && <div><dt>Payer</dt><dd><code>{truncate(walletAccount, 9, 7)}</code></dd></div>}
-              {proof.entitlement?.transactionHash && <div><dt>Payment receipt</dt><dd><a href={`${integrations?.injective.explorerUrl ?? TESTNET_EXPLORER}/tx/${proof.entitlement.transactionHash}`} target="_blank" rel="noreferrer">Open transaction <Icon name="external" size={12} /></a></dd></div>}
             </dl>
             <VerificationLayers verification={verification} />
             <div className="packet-checks">
@@ -1649,9 +1849,10 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
             {!verification && <button type="button" className="packet-retry" onClick={() => void retryVerification()}>Retry packet verification <Icon name="arrow" /></button>}
             {verification && <button type="button" className={`packet-retry tamper-${tamperResult}`} onClick={() => void runTamperControl()} disabled={tamperResult === "running"} data-testid="tamper-control">{tamperResult === "idle" ? "Run tamper negative control" : tamperResult === "running" ? "Testing altered packet…" : tamperResult === "passed" ? "Tampered packet rejected · PASS" : tamperResult === "unavailable" ? "Tamper control unavailable · RETRY" : "Tampered packet accepted · FAIL"}<Icon name={tamperResult === "passed" ? "check" : "arrow"} /></button>}
           </section>
+          </div>
         )}
 
-        {message && <div className={status === "binding-ready" || (status === "paid" && isFullyVerifiedProof(verification)) ? "drawer-notice" : "drawer-error"} role="alert">{message}</div>}
+        {message && <div className={status === "binding-ready" || (status === "paid" && isFullyVerifiedProof(verification)) ? "drawer-notice" : "drawer-error"} role={status === "binding-ready" || status === "paid" ? "status" : "alert"} aria-live={status === "binding-ready" || status === "paid" ? "polite" : undefined}>{message}</div>}
         <footer><Icon name="wallet" /><p>Proofline never embeds a payer private key. Live mode validates the quoted network, asset, payee and spend cap before requesting an EIP-3009 signature from the connected wallet.</p></footer>
       </aside>
     </div>
@@ -1710,6 +1911,16 @@ export function App() {
   const closeProofDrawer = useCallback(() => setDrawerOpen(false), []);
   const openWalletDialog = useCallback(() => setWalletDialogOpen(true), []);
   const closeWalletDialog = useCallback(() => setWalletDialogOpen(false), []);
+  const continueToProofReview = useCallback(() => {
+    setWalletDialogOpen(false);
+    window.requestAnimationFrame(() => {
+      const nextAction = document.querySelector<HTMLElement>(
+        "[data-testid='request-proof-report'], [data-testid='continue-to-signatures'], [data-testid='submit-proof-payment']",
+      );
+      nextAction?.scrollIntoView({ behavior: "smooth", block: "center" });
+      nextAction?.focus({ preventScroll: true });
+    });
+  }, []);
 
   const defaultCatalogMatchId = catalog?.matches.find((entry) => entry.dataMode === "delayed")?.id
     ?? catalog?.matches[0]?.id
@@ -1861,14 +2072,17 @@ export function App() {
           type="button"
           role="tab"
           aria-selected={experience === id}
-          aria-controls={`experience-panel-${id}`}
+          aria-controls={experience === id ? `experience-panel-${id}` : undefined}
           tabIndex={experience === id ? 0 : -1}
           onClick={() => chooseExperience(id)}
           onKeyDown={(event) => {
-            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
             event.preventDefault();
-            const direction = event.key === "ArrowRight" ? 1 : -1;
-            const nextIndex = (index + direction + EXPERIENCE_OPTIONS.length) % EXPERIENCE_OPTIONS.length;
+            const nextIndex = event.key === "Home"
+              ? 0
+              : event.key === "End"
+                ? EXPERIENCE_OPTIONS.length - 1
+                : (index + (event.key === "ArrowRight" ? 1 : -1) + EXPERIENCE_OPTIONS.length) % EXPERIENCE_OPTIONS.length;
             const next = EXPERIENCE_OPTIONS[nextIndex]![0];
             if (paymentFlowLocked && next !== experience) return;
             chooseExperience(next);
@@ -1923,13 +2137,15 @@ export function App() {
         matchSelectionDisabled={paymentFlowLocked}
         wallet={wallet}
         walletDialogOpen={walletDialogOpen}
+        walletLocked={paymentFlowLocked}
         onOpenWallet={openWalletDialog}
         onCloseWallet={closeWalletDialog}
+        onContinueToProof={continueToProofReview}
       />
       <div className="task-brief-strip" role="status">
         <strong>{activeDataMode === "historical-replay" ? "HISTORICAL REPLAY · NOT LIVE" : finalResultPending ? "SCHEDULED · NO RESULT" : "TESTNET ONLY"}</strong>
-        <span>{showReplay ? "Synthetic conflict is disclosed and no payment is required." : finalResultPending ? "Final proof and payment remain unavailable until independently verified full time." : "Connect → review 0.01 test USDC → sign twice → verify three proof layers."}</span>
-        <small>{showReplay ? "All source timestamps and fault injection remain visible." : finalResultPending ? "0 signatures · 0 payments" : "2 signatures · 1 payment · 0 wallet-broadcast transactions"}</small>
+        <span>{showReplay ? "Synthetic conflict is disclosed and no payment is required." : finalResultPending ? "Final proof and payment remain unavailable until independently verified full time." : "0.01 test USDC · no mainnet funds."}</span>
+        {(showReplay || finalResultPending) && <small>{showReplay ? "All source timestamps and fault injection remain visible." : "0 signatures · 0 payments"}</small>}
       </div>
       {!showReplay && (
         <button

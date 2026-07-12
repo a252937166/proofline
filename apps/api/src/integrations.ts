@@ -6,6 +6,7 @@ import {
   X402_PRICE_DISPLAY,
   type RuntimeConfig,
 } from "./config.js";
+import type { TestUsdcDispenserPublicStatus } from "./test-usdc-dispenser.js";
 
 function providerStatus(input: {
   id: string;
@@ -30,6 +31,7 @@ function providerStatus(input: {
 export function integrationStatus(
   config: RuntimeConfig,
   anchorService: AnchorService,
+  testUsdcDispenser: TestUsdcDispenserPublicStatus,
   env: NodeJS.ProcessEnv = process.env,
 ): Record<string, unknown> {
   const anchor = anchorService.status();
@@ -107,6 +109,7 @@ export function integrationStatus(
           : "Live x402 was requested, but its payee/facilitator or the required Injective testnet anchor runtime is incomplete. Requests fail closed; no demo proof can trigger a real payment."
         : "Demo sandbox negotiates HTTP 402 without signing, transferring USDC, or creating a transaction. The response is visibly marked simulated.",
     },
+    testUsdcDispenser,
     cctp: {
       status: "plan-only",
       configured: false,

@@ -66,7 +66,7 @@ export interface UseWalletOptions {
 export interface UseWalletResult extends WalletState {
   connect(provider: DiscoveredWalletProvider): Promise<void>;
   disconnect(): void;
-  refresh(): Promise<void>;
+  refresh(): Promise<bigint | null>;
   requestDiscovery(): void;
   switchNetwork(): Promise<void>;
   watchAsset(): Promise<boolean>;
@@ -348,14 +348,14 @@ export function useWallet(options: UseWalletOptions): UseWalletResult {
 
   const refresh = useCallback(async () => {
     const provider = state.selectedProvider;
-    if (!provider) return;
+    if (!provider) return null;
     const operation = ++operationRef.current;
     try {
       const accounts = await provider.provider.request({ method: "eth_accounts" });
       const account = firstAccount(accounts);
       if (!account) {
         dispatch({ type: "disconnected", provider });
-        return;
+        return null;
       }
       if (account.toLowerCase() !== state.account?.toLowerCase()) {
         dispatch({ type: "account-changed", provider, account });
@@ -365,7 +365,7 @@ export function useWallet(options: UseWalletOptions): UseWalletResult {
         account,
         options.assetAddress,
       );
-      if (operation !== operationRef.current) return;
+      if (operation !== operationRef.current) return null;
       dispatch({
         type: "refreshed",
         provider,
@@ -373,9 +373,11 @@ export function useWallet(options: UseWalletOptions): UseWalletResult {
         ...preflight,
         minimumBalance,
       });
+      return preflight.usdcBalance;
     } catch (error) {
-      if (operation !== operationRef.current) return;
+      if (operation !== operationRef.current) return null;
       dispatch({ type: "error", provider, message: walletErrorMessage(error) });
+      return null;
     }
   }, [minimumBalance, options.assetAddress, state.account, state.selectedProvider]);
 

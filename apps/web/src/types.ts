@@ -319,6 +319,26 @@ export interface IntegrationsResponse {
     paymentHeader: "PAYMENT-SIGNATURE";
     disclosure: string;
   };
+  testUsdcDispenser?: {
+    mode: "disabled" | "enabled";
+    status: "disabled" | "misconfigured" | "configured-unverified";
+    configured: boolean;
+    network: "eip155:1439";
+    chainId: 1439;
+    asset: {
+      symbol: "USDC";
+      address: string;
+      decimals: 6;
+    };
+    amountAtomic: "20000";
+    amountDisplay: "0.02 test USDC";
+    limits: {
+      addressWindowHours: number;
+      ipClaimsPerWindow: number;
+      globalClaimsPerWindow: number;
+    };
+    disclosure: string;
+  };
   cctp?: {
     status?: string;
     configured?: boolean;
@@ -327,6 +347,27 @@ export interface IntegrationsResponse {
     source?: string;
     destination?: string;
   };
+}
+
+export interface TestUsdcClaimResponse {
+  schema: "proofline.test-usdc-claim.v1";
+  status: "confirmed" | "submitted";
+  network: "eip155:1439";
+  chainId: 1439;
+  asset: {
+    symbol: "USDC";
+    address: string;
+    decimals: 6;
+  };
+  recipient: `0x${string}`;
+  amountAtomic: "20000";
+  amountDisplay: "0.02 test USDC";
+  transactionHash: `0x${string}`;
+  explorerUrl: string;
+  requestedAt: string;
+  submittedAt: string;
+  confirmedAt?: string;
+  nextEligibleAt: string;
 }
 
 export interface PaymentQuote {

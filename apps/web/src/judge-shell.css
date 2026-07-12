@@ -622,6 +622,171 @@ body.wallet-modal-open {
   line-height: 1.45;
 }
 
+.wallet-flow-lock {
+  margin: 14px 0 0;
+  padding: 11px 12px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #37545d;
+  border: 1px solid #88a2a2;
+  background: #e5edeb;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.wallet-flow-lock svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--teal);
+}
+
+.wallet-ready-callout {
+  margin-top: 16px;
+  padding: 16px;
+  color: var(--floodlight);
+  border: 1px solid #2da9b8;
+  background: var(--night);
+}
+
+.wallet-ready-callout > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--cyan);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.wallet-ready-callout p {
+  margin: 10px 0 14px;
+  color: #a8babd;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.wallet-ready-callout .claim-receipt-link {
+  margin: -3px 0 12px;
+  color: var(--cyan);
+}
+
+.wallet-ready-callout .wallet-primary {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 15px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--night);
+  border: 1px solid var(--amber);
+  background: var(--amber);
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.wallet-funding-callout {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #d39a27;
+  background: #fff7df;
+}
+
+.wallet-funding-callout h3 {
+  margin: 4px 0 8px;
+  font-family: var(--display);
+  font-size: 25px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.wallet-funding-callout > p:not(.eyebrow) {
+  margin: 0 0 14px;
+  color: #50666a;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.wallet-funding-callout .wallet-primary {
+  width: 100%;
+  min-height: 46px;
+  padding: 0 14px;
+  color: var(--night);
+  border: 1px solid var(--amber);
+  background: var(--amber);
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.wallet-funding-callout .wallet-primary:disabled {
+  color: #6b7776;
+  border-color: #b8c2bc;
+  background: #e2e7e2;
+}
+
+.claim-message,
+.claim-receipt-link {
+  margin-top: 10px;
+  display: block;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.claim-message.is-error {
+  color: #982f2f;
+}
+
+.claim-message.is-confirmed {
+  color: #126b62;
+}
+
+.claim-receipt-link {
+  color: #0b6777;
+  font-family: var(--mono);
+  text-decoration: none;
+}
+
+.wallet-more-actions {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.wallet-more-actions summary {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: #5b7175;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.wallet-more-actions > div {
+  padding-bottom: 2px;
+  display: grid;
+  gap: 8px;
+}
+
+.wallet-more-actions button {
+  min-height: 44px;
+  padding: 0 14px;
+  color: var(--night);
+  border: 1px solid #9baba6;
+  background: transparent;
+}
+
+.wallet-more-actions .wallet-disconnect {
+  color: var(--red);
+  border-color: rgba(220, 76, 76, 0.5);
+}
+
 .task-brief-strip {
   min-height: 48px;
   padding: 7px 28px;
@@ -799,6 +964,28 @@ body.wallet-modal-open {
   font-size: 37px;
 }
 
+.price-summary-strip {
+  min-height: 50px;
+  padding: 11px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  color: #8fa7ac;
+  border-bottom: 1px solid var(--line-dark);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.price-summary-strip strong {
+  color: var(--amber);
+  font-family: var(--display);
+  font-size: 19px;
+  letter-spacing: 0.02em;
+}
+
 .payment-stage-rail {
   margin: 0;
   padding: 17px 20px 12px;
@@ -971,6 +1158,100 @@ body.wallet-modal-open {
 
 .proof-packet .layer-pass strong {
   color: #68ded0;
+}
+
+.proof-result-stack {
+  scroll-margin-block: 18px;
+}
+
+.payment-receipt {
+  margin: 10px 20px 0;
+  padding: 17px 18px;
+  color: var(--floodlight);
+  border: 1px solid #4b6870;
+  background: #0d2836;
+}
+
+.payment-receipt.is-fresh {
+  border-color: var(--cyan);
+  box-shadow: inset 4px 0 var(--cyan);
+}
+
+.payment-receipt > header {
+  padding-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #38515a;
+}
+
+.payment-receipt > header span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--cyan);
+}
+
+.payment-receipt > header small {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.payment-receipt > header strong {
+  color: var(--amber);
+  font-family: var(--display);
+  font-size: 12px;
+  letter-spacing: 0.05em;
+}
+
+.payment-receipt dl {
+  margin: 7px 0 0;
+}
+
+.payment-receipt dl > div {
+  min-height: 35px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px dotted #3b555e;
+}
+
+.payment-receipt dt {
+  color: #799298;
+  font-family: var(--mono);
+  font-size: 8px;
+  text-transform: uppercase;
+}
+
+.payment-receipt dd {
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+.payment-receipt a {
+  color: var(--cyan);
+  text-decoration: none;
+}
+
+.receipt-balance dd {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+  color: #91a7ac;
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.receipt-balance strong {
+  color: var(--floodlight);
 }
 
 .proof-drawer.is-embedded > footer {
@@ -1199,6 +1480,7 @@ body.wallet-modal-open {
   .proof-drawer.is-embedded > header,
   .proof-drawer.is-embedded .drawer-mode,
   .proof-drawer.is-embedded .price-ticket,
+  .proof-drawer.is-embedded .price-summary-strip,
   .payment-stage-rail {
     padding-left: 16px;
     padding-right: 16px;
@@ -1209,6 +1491,7 @@ body.wallet-modal-open {
   .quote-sheet,
   .proof-binding-handoff,
   .payment-uncertain,
+  .payment-receipt,
   .proof-packet {
     margin-left: 12px;
     margin-right: 12px;

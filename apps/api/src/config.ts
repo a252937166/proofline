@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 
 import type { Address, Hex } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 
 export const INJECTIVE_TESTNET_CHAIN_ID = 1_439;
 export const INJECTIVE_TESTNET_NETWORK = "eip155:1439";
@@ -14,6 +15,11 @@ export const INJECTIVE_TESTNET_USDC =
   "0x0C382e685bbeeFE5d3d9C29e29E341fEE8E84C5d" as Address;
 export const X402_PRICE_ATOMIC = "10000";
 export const X402_PRICE_DISPLAY = "0.01 USDC";
+export const TEST_USDC_DISPENSER_AMOUNT_ATOMIC = "20000";
+export const TEST_USDC_DISPENSER_MINIMUM_BALANCE_ATOMIC = "10000";
+export const TEST_USDC_DISPENSER_ADDRESS_WINDOW_MS = 24 * 60 * 60 * 1_000;
+export const TEST_USDC_DISPENSER_IP_LIMIT = 5;
+export const TEST_USDC_DISPENSER_DEFAULT_DAILY_CLAIM_LIMIT = 50;
 
 export type AnchorRuntimeConfig =
   | { mode: "demo" }
@@ -43,6 +49,18 @@ export type X402RuntimeConfig =
       publicApiUrl?: string;
     };
 
+export interface TestUsdcDispenserRuntimeConfig {
+  enabled: boolean;
+  configured: boolean;
+  rpcUrl: string;
+  chainId: number;
+  explorerUrl: string;
+  dailyClaimLimit: number;
+  privateKey?: Hex;
+  ipHashKey?: string;
+  stateFile?: string;
+}
+
 export interface RuntimeConfig {
   host: string;
   port: number;
@@ -51,6 +69,7 @@ export interface RuntimeConfig {
   footballDataToken?: string;
   anchor: AnchorRuntimeConfig;
   x402: X402RuntimeConfig;
+  testUsdcDispenser: TestUsdcDispenserRuntimeConfig;
 }
 
 function isAddress(value: string | undefined): value is Address {
@@ -64,6 +83,28 @@ function isPrivateKey(value: string | undefined): value is Hex {
 function optionalString(value: string | undefined): string | undefined {
   const clean = value?.trim();
   return clean ? clean : undefined;
+}
+
+function optionalBoolean(
+  value: string | undefined,
+  label: string,
+): boolean {
+  const clean = optionalString(value)?.toLowerCase();
+  if (!clean || clean === "false" || clean === "0") return false;
+  if (clean === "true" || clean === "1") return true;
+  throw new Error(`${label} must be true, false, 1, or 0`);
+}
+
+function dispenserDailyClaimLimit(value: string | undefined): number {
+  const limit = Number(
+    optionalString(value) ?? TEST_USDC_DISPENSER_DEFAULT_DAILY_CLAIM_LIMIT,
+  );
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 1_000) {
+    throw new Error(
+      "PROOFLINE_TEST_USDC_DISPENSER_DAILY_CLAIM_LIMIT must be an integer between 1 and 1000",
+    );
+  }
+  return limit;
 }
 
 function listenHost(value: string | undefined): string {
@@ -265,6 +306,80 @@ export function readRuntimeConfig(
     optionalString(env.API_FOOTBALL_TOKEN) ??
     optionalString(env.API_FOOTBALL_KEY);
   const footballDataToken = optionalString(env.FOOTBALL_DATA_TOKEN);
+  const dispenserEnabled = optionalBoolean(
+    env.PROOFLINE_TEST_USDC_DISPENSER_ENABLED,
+    "PROOFLINE_TEST_USDC_DISPENSER_ENABLED",
+  );
+  const dispenserPrivateKey = optionalString(
+    env.PROOFLINE_TEST_USDC_DISPENSER_PRIVATE_KEY,
+  );
+  const dispenserIpHashKey = optionalString(
+    env.PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY,
+  );
+  const dispenserStateFile = optionalString(
+    env.PROOFLINE_TEST_USDC_DISPENSER_STATE_FILE,
+  );
+  if (
+    dispenserStateFile &&
+    (dispenserStateFile.includes("\0") || dispenserStateFile.length > 4_096)
+  ) {
+    throw new Error(
+      "PROOFLINE_TEST_USDC_DISPENSER_STATE_FILE must be a valid filesystem path",
+    );
+  }
+  const validDispenserIpHashKey = Boolean(
+    dispenserIpHashKey && /^[A-Za-z0-9_-]{32,128}$/.test(dispenserIpHashKey),
+  );
+  if (dispenserIpHashKey && !validDispenserIpHashKey) {
+    throw new Error(
+      "PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY must be 32-128 letters, digits, underscores, or hyphens",
+    );
+  }
+  if (dispenserEnabled && isPrivateKey(dispenserPrivateKey)) {
+    const otherPrivateKeys = [
+      env.DEPLOYER_PRIVATE_KEY,
+      env.INJECTIVE_PRIVATE_KEY,
+      env.ANCHOR_PRIVATE_KEY,
+      env.X402_FACILITATOR_PRIVATE_KEY,
+      env.X402_AGENT_PRIVATE_KEY,
+      env.PROOFLINE_ISSUER_PRIVATE_KEY,
+    ]
+      .map(optionalString)
+      .filter((value): value is string => Boolean(value));
+    if (
+      otherPrivateKeys.some(
+        (value) => value.toLowerCase() === dispenserPrivateKey.toLowerCase(),
+      ) ||
+      (isAddress(payTo) &&
+        privateKeyToAccount(dispenserPrivateKey as Hex).address.toLowerCase() ===
+          payTo.toLowerCase())
+    ) {
+      throw new Error(
+        "PROOFLINE_TEST_USDC_DISPENSER_PRIVATE_KEY must be a dedicated testnet-only wallet key",
+      );
+    }
+  }
+  const testUsdcDispenser: TestUsdcDispenserRuntimeConfig = {
+    enabled: dispenserEnabled,
+    configured:
+      dispenserEnabled &&
+      isPrivateKey(dispenserPrivateKey) &&
+      validDispenserIpHashKey &&
+      Boolean(dispenserStateFile),
+    rpcUrl,
+    chainId,
+    explorerUrl,
+    dailyClaimLimit: dispenserDailyClaimLimit(
+      env.PROOFLINE_TEST_USDC_DISPENSER_DAILY_CLAIM_LIMIT,
+    ),
+    ...(isPrivateKey(dispenserPrivateKey)
+      ? { privateKey: dispenserPrivateKey }
+      : {}),
+    ...(validDispenserIpHashKey && dispenserIpHashKey
+      ? { ipHashKey: dispenserIpHashKey }
+      : {}),
+    ...(dispenserStateFile ? { stateFile: dispenserStateFile } : {}),
+  };
 
   return {
     host: listenHost(env.HOST),
@@ -274,5 +389,6 @@ export function readRuntimeConfig(
     ...(footballDataToken ? { footballDataToken } : {}),
     anchor,
     x402,
+    testUsdcDispenser,
   };
 }

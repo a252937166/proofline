@@ -14,7 +14,40 @@ canonical event JSON, payment boundary, and on-chain commitment.
 
 **Hosted demo:** [proofline.axiqo.xyz](https://proofline.axiqo.xyz) ·
 **GitHub:** [a252937166/proofline](https://github.com/a252937166/proofline) ·
-**Immutable release:** [`global-cup-final`](https://github.com/a252937166/proofline/releases/tag/global-cup-final)
+**Immutable release:** [`global-cup-final-v2`](https://github.com/a252937166/proofline/releases/tag/global-cup-final-v2)
+
+## Judge entry points
+
+| Path | Direct link | What it proves |
+| --- | --- | --- |
+| Real wallet test | [Wallet → Review → Sign → Verify](https://proofline.axiqo.xyz/?case=WC-2026-M97-FRA-MAR&experience=wallet) | Built-in `0.02` test-USDC funding when needed, a real `0.01` quote, two explicit wallet signatures for one payment, a receipt, and three independent verification layers |
+| No-wallet audit | [Verify the published packet](https://proofline.axiqo.xyz/?case=WC-2026-M97-FRA-MAR&experience=audit) | Recompute packet integrity, issuer trust, and the latest Registry v3 commitment without a new wallet request or payment |
+| Conflict replay | [Watch conflict quarantine](https://proofline.axiqo.xyz/?case=WC-2022-WAL-IRN&experience=replay) | Reproduce a disclosed bad-source claim, settlement hold, correction, and deterministic recovery |
+
+The paid judge path is deliberately not a one-click action. **Wallet** performs
+the testnet preflight, **Review** exposes the unsigned HTTP 402 terms, **Sign**
+requests two explicit confirmations that produce one bound payment
+authorization, and **Verify** independently checks packet integrity, the trusted
+issuer, and the latest Injective commitment.
+
+The wallet sheet accepts any compatible injected EIP-6963/EIP-1193 provider.
+If an account has less than the proof price, a dedicated, rate-limited testnet
+dispenser can send exactly `0.02` canonical test USDC, link the Blockscout
+receipt, and refresh the displayed balance. It never accepts a browser-supplied
+amount, token, or network.
+
+## Final release identity
+
+`global-cup-final-v2` is the immutable judge release. The submission is treated
+as frozen only when every row below resolves to the same final source revision;
+the table is an acceptance gate, not a claim about an unverified deployment.
+
+| Surface | Stable evidence | Final-freeze requirement |
+| --- | --- | --- |
+| Source release | [`global-cup-final-v2`](https://github.com/a252937166/proofline/releases/tag/global-cup-final-v2) | The tag resolves to the final submitted source revision and is never moved |
+| CI | [Proofline CI](https://github.com/a252937166/proofline/actions/workflows/ci.yml) | The run for that release revision passes `npm run check` and `npm audit --audit-level=high` |
+| Live build | [`/release.json`](https://proofline.axiqo.xyz/release.json) and the page Footer | `sourceCommit` and the displayed commit resolve to the release tag; the release ID identifies `global-cup-final-v2` |
+| Downloadable artifacts | [GitHub Release assets](https://github.com/a252937166/proofline/releases/tag/global-cup-final-v2) | API and Web archives carry the same release ID and publish matching SHA-256 manifests |
 
 ## Public Injective testnet proof
 
@@ -242,6 +275,11 @@ ANCHOR_PRIVATE_KEY=0x...
 X402_MODE=injective-testnet
 X402_PAY_TO=0x...
 X402_FACILITATOR_PRIVATE_KEY=0x...
+# Optional judge funding path; use an isolated testnet-only wallet.
+PROOFLINE_TEST_USDC_DISPENSER_ENABLED=true
+PROOFLINE_TEST_USDC_DISPENSER_PRIVATE_KEY=0x...
+PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY=...
+PROOFLINE_TEST_USDC_DISPENSER_STATE_FILE=/absolute/root-only/path.json
 ```
 
 Use funded testnet-only wallets. Never commit `.env`.
