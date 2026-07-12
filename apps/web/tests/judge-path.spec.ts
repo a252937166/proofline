@@ -1005,6 +1005,7 @@ test.describe("judge-first wallet workspace", () => {
     await expect(nextAction).toBeVisible();
     const metrics = await page.evaluate(() => {
       const action = document.querySelector<HTMLElement>("[data-testid='mobile-next-action']");
+      const stageRail = document.querySelector<HTMLElement>(".payment-stage-rail");
       const rect = action?.getBoundingClientRect();
       const viewportWidth = document.documentElement.clientWidth;
       const overflowSources = [...document.querySelectorAll<HTMLElement>("body *")]
@@ -1026,12 +1027,14 @@ test.describe("judge-first wallet workspace", () => {
         viewportWidth,
         actionHeight: rect?.height ?? 0,
         actionWidth: rect?.width ?? 0,
+        stageRailAnimation: stageRail ? getComputedStyle(stageRail).animationName : "missing",
         allowlistedOverflowSources: overflowSources.filter((entry) => entry.allowlisted),
         unexpectedOverflowSources: overflowSources.filter((entry) => !entry.allowlisted).slice(0, 12),
       };
     });
     expect(metrics.documentWidth, `Unexpected horizontal overflow sources: ${JSON.stringify(metrics.unexpectedOverflowSources)}`).toBeLessThanOrEqual(metrics.viewportWidth);
     expect(metrics.unexpectedOverflowSources, `Only .sr-only and [data-allow-overflow="ellipsis"] may overflow internally. Allowlisted: ${JSON.stringify(metrics.allowlistedOverflowSources)}`).toEqual([]);
+    expect(metrics.stageRailAnimation).toBe("none");
     expect(metrics.actionHeight).toBeGreaterThanOrEqual(44);
     expect(metrics.actionWidth).toBeGreaterThanOrEqual(44);
   });
