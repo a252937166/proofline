@@ -1,5 +1,6 @@
 import type { PaymentQuote } from "../types";
 import { keccak256, stringToHex } from "viem";
+import type { EIP1193Provider } from "./eip6963";
 
 const INJECTIVE_TESTNET_NETWORK = "eip155:1439";
 const INJECTIVE_TESTNET_CHAIN_ID = 1439;
@@ -10,16 +11,6 @@ const SIGNATURE_PATTERN = /^0x[0-9a-fA-F]+$/;
 const PROOF_PURCHASE_SCHEMA = "proofline.proof-purchase.v1";
 const PROOF_PURCHASE_DOMAIN_NAME = "Proofline Proof Purchase";
 const PROOF_PURCHASE_DOMAIN_VERSION = "1";
-
-interface EthereumProvider {
-  request(args: { method: string; params?: unknown[] }): Promise<unknown>;
-}
-
-declare global {
-  interface Window {
-    ethereum?: EthereumProvider;
-  }
-}
 
 export interface X402Requirement {
   scheme: "exact";
@@ -58,6 +49,8 @@ interface ProofPurchaseMessage {
 }
 
 export interface BrowserPaymentAuthorization {
+  /** Memory-only identity of the provider that produced signature 1/2. */
+  provider: EIP1193Provider;
   account: string;
   nonce: string;
   requirement: X402Requirement;
@@ -157,8 +150,8 @@ function errorCode(error: unknown): number | undefined {
   return isRecord(error) && typeof error.code === "number" ? error.code : undefined;
 }
 
-async function ensureInjectiveTestnet(
-  provider: EthereumProvider,
+export async function ensureInjectiveTestnet(
+  provider: EIP1193Provider,
   rpcUrl: string,
   explorerUrl: string,
 ): Promise<void> {
@@ -185,7 +178,9 @@ async function ensureInjectiveTestnet(
   }
 }
 
-interface BrowserPaymentOptions {
+export interface BrowserPaymentOptions {
+  provider: EIP1193Provider;
+  account: string;
   quote: PaymentQuote;
   sessionId: string;
   expectedAsset: string;
@@ -208,10 +203,6 @@ export async function createBrowserPaymentAuthorization(
 ): Promise<BrowserPaymentAuthorization> {
   const assertActive = () => assertPaymentActive(options.isActive);
   assertActive();
-  const provider = window.ethereum;
-  if (!provider) {
-    throw new Error("No browser wallet was detected. Unlock MetaMask, or purchase through the Proofline MCP / Agent CLI.");
-  }
 
   const requirement = readX402Requirement(options.quote);
   if (requirement.network !== INJECTIVE_TESTNET_NETWORK) {
@@ -235,12 +226,18 @@ export async function createBrowserPaymentAuthorization(
   }
   if (
     !/^\d+$/.test(requirement.amount) ||
+    !/^\d+$/.test(options.maximumAmount) ||
     BigInt(requirement.amount) <= 0n ||
-    BigInt(requirement.amount) > BigInt(options.maximumAmount)
+    BigInt(requirement.amount) !== BigInt(options.maximumAmount)
   ) {
-    throw new Error(`Payment refused: the quote exceeds the ${options.maximumAmount} atomic USDC policy cap.`);
+    throw new Error(`Payment refused: the quote must equal the configured ${options.maximumAmount} atomic test USDC price.`);
   }
-  if (requirement.maxTimeoutSeconds <= 0 || requirement.maxTimeoutSeconds > 300) {
+  if (
+    !Number.isFinite(requirement.maxTimeoutSeconds) ||
+    !Number.isInteger(requirement.maxTimeoutSeconds) ||
+    requirement.maxTimeoutSeconds <= 0 ||
+    requirement.maxTimeoutSeconds > 300
+  ) {
     throw new Error("Payment refused: the authorization window is outside the 5-minute policy cap.");
   }
   if (!/^[A-Za-z0-9_-]{8,64}$/.test(options.sessionId)) {
@@ -255,14 +252,35 @@ export async function createBrowserPaymentAuthorization(
     throw new Error("Payment refused: the quote is missing the USDC EIP-712 domain name or version.");
   }
 
-  const accounts = await provider.request({ method: "eth_requestAccounts" });
+  const provider = options.provider;
+  if (!provider || typeof provider.request !== "function") {
+    throw new Error("No compatible connected EVM wallet is available for signing.");
+  }
+  if (!/^0x[0-9a-fA-F]{40}$/.test(options.account)) {
+    throw new Error("The connected wallet account is invalid. Reconnect before signing.");
+  }
+
+  // Connection is a separate, explicit App-level action. Payment signing must
+  // never pick a mutable global provider or silently request a different
+  // account than the one the judge reviewed.
+  const accounts = await provider.request({ method: "eth_accounts" });
   assertActive();
   const account = Array.isArray(accounts) && typeof accounts[0] === "string" ? accounts[0] : null;
-  if (!account || !/^0x[0-9a-fA-F]{40}$/.test(account)) {
-    throw new Error("The connected wallet did not return a valid EVM account.");
+  if (
+    !account ||
+    !/^0x[0-9a-fA-F]{40}$/.test(account) ||
+    account.toLowerCase() !== options.account.toLowerCase()
+  ) {
+    throw new Error("The connected wallet account changed. Review the payment again before signing.");
   }
-  await ensureInjectiveTestnet(provider, options.rpcUrl, options.explorerUrl);
+  const activeChain = await provider.request({ method: "eth_chainId" });
   assertActive();
+  if (
+    typeof activeChain !== "string" ||
+    activeChain.toLowerCase() !== INJECTIVE_TESTNET_CHAIN_HEX
+  ) {
+    throw new Error("Switch the connected wallet to Injective EVM Testnet before signing.");
+  }
 
   const now = Math.floor(Date.now() / 1000);
   const authorization = {
@@ -349,6 +367,7 @@ export async function createBrowserPaymentAuthorization(
   };
 
   return {
+    provider,
     account,
     nonce: authorization.nonce,
     requirement,
@@ -361,27 +380,31 @@ export async function createBrowserPaymentAuthorization(
 }
 
 export async function completeBrowserPaymentSignature(options: {
+  provider: EIP1193Provider;
+  account: string;
   authorization: BrowserPaymentAuthorization;
   onSigningStep?: (step: BrowserSigningStep) => void;
   isActive?: () => boolean;
 }): Promise<BrowserPayment> {
   assertPaymentActive(options.isActive);
-  const provider = window.ethereum;
-  if (!provider) {
-    throw new Error("No browser wallet was detected. Unlock OKX Wallet or MetaMask, then retry the proof binding.");
-  }
   const pending = options.authorization;
+  if (
+    options.provider !== pending.provider ||
+    options.account.toLowerCase() !== pending.account.toLowerCase()
+  ) {
+    throw new Error("The connected wallet changed after signature 1/2. Discard the authorization and review the payment again.");
+  }
   const validBefore = Number(pending.authorization.validBefore);
   if (!Number.isFinite(validBefore) || validBefore <= Math.floor(Date.now() / 1_000) + 5) {
     throw new Error("The USDC authorization expired before proof binding. Discard it and request a fresh quote.");
   }
 
-  // This provider call must be the first awaited operation after the user's
-  // explicit second click. OKX otherwise queues the signature inside the
-  // extension without surfacing its confirmation window.
+  // This must remain the first provider request after the user's explicit
+  // second click. Compatible browser wallets can then surface signature 2/2
+  // from a fresh user gesture instead of leaving a request hidden or queued.
   options.onSigningStep?.(2);
   assertPaymentActive(options.isActive);
-  const purchaseSignature = await provider.request({
+  const purchaseSignature = await options.provider.request({
     method: "eth_signTypedData_v4",
     params: [pending.account, JSON.stringify(pending.purchaseTypedData)],
   });
@@ -392,6 +415,22 @@ export async function completeBrowserPaymentSignature(options: {
   ) {
     throw new Error("The wallet did not return a valid ProofPurchase binding signature.");
   }
+
+  // Signature 2/2 is the first request after the fresh user gesture. Only
+  // after the wallet has surfaced it do we re-read mutable provider state and
+  // fail closed before constructing or submitting PAYMENT-SIGNATURE.
+  const currentAccounts = await options.provider.request({ method: "eth_accounts" });
+  const currentChain = await options.provider.request({ method: "eth_chainId" });
+  const currentAccount = Array.isArray(currentAccounts) && typeof currentAccounts[0] === "string"
+    ? currentAccounts[0]
+    : "";
+  if (currentAccount.toLowerCase() !== pending.account.toLowerCase()) {
+    throw new Error("The wallet account changed during proof binding. No payment was submitted.");
+  }
+  if (typeof currentChain !== "string" || currentChain.toLowerCase() !== INJECTIVE_TESTNET_CHAIN_HEX) {
+    throw new Error("The wallet network changed during proof binding. No payment was submitted.");
+  }
+  assertPaymentActive(options.isActive);
 
   return {
     account: pending.account,
@@ -423,6 +462,8 @@ export async function createBrowserPaymentSignature(
 ): Promise<BrowserPayment> {
   const authorization = await createBrowserPaymentAuthorization(options);
   return completeBrowserPaymentSignature({
+    provider: options.provider,
+    account: options.account,
     authorization,
     ...(options.onSigningStep
       ? { onSigningStep: options.onSigningStep }

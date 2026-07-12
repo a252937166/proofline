@@ -9,14 +9,22 @@ import {
 } from "react";
 
 import { JudgeDemo } from "./components/JudgeDemo";
-import { CatalogMatchView, MatchCatalogBar } from "./components/MatchCatalog";
+import {
+  CatalogMatchView,
+  ConflictReplayEntry,
+  NoWalletAudit,
+} from "./components/MatchCatalog";
 import { useReplay, type ReplayAction } from "./hooks/useReplay";
+import { useWallet, type UseWalletResult } from "./hooks/useWallet";
 import { api, ApiError, PROOFLINE_SESSION_ID } from "./lib/api";
+import type { DiscoveredWalletProvider } from "./lib/eip6963";
 import {
   completeBrowserPaymentSignature,
   createBrowserPaymentAuthorization,
+  readX402Requirement,
   type BrowserPaymentAuthorization,
   type BrowserSigningStep,
+  type X402Requirement,
 } from "./lib/wallet";
 import type {
   AnchorRecord,
@@ -26,6 +34,7 @@ import type {
   EventRecord,
   IntegrationsResponse,
   McpRuntimeResponse,
+  MatchCatalogResponse,
   PaymentQuote,
   ProofPacketResponse,
   ProofVerificationResponse,
@@ -39,14 +48,24 @@ type DrawerStatus =
   | "preparing"
   | "quoting"
   | "quoted"
+  | "signature-ready"
   | "authorizing"
   | "binding-ready"
   | "binding"
   | "settling"
+  | "verifying"
+  | "delivered-unverified"
   | "uncertain"
   | "recovering"
   | "paid"
   | "error";
+
+type Experience = "wallet" | "audit" | "replay";
+const EXPERIENCE_OPTIONS = [
+  ["wallet", "Real wallet test"],
+  ["audit", "No-wallet audit"],
+  ["replay", "Conflict replay"],
+] as const;
 
 interface ProofTarget {
   matchId: string;
@@ -190,10 +209,175 @@ function fallbackDecision(
   };
 }
 
-function AppHeader({ integrations, mode = "replay", mcpRuntime = null }: {
+function formatTestUsdc(balance: bigint | null): string {
+  if (balance === null) return "Checking…";
+  const whole = balance / 1_000_000n;
+  const fraction = (balance % 1_000_000n).toString().padStart(6, "0").replace(/0+$/, "");
+  return `${whole}${fraction ? `.${fraction}` : ""} test USDC`;
+}
+
+function WalletProviderIcon({ provider, size = 28 }: {
+  provider: DiscoveredWalletProvider | null;
+  size?: number;
+}) {
+  return provider?.info.icon ? (
+    <img
+      className="wallet-provider-icon"
+      src={provider.info.icon}
+      alt=""
+      width={size}
+      height={size}
+    />
+  ) : (
+    <span className="wallet-provider-fallback" style={{ width: size, height: size }} aria-hidden="true">
+      <Icon name="wallet" size={Math.max(16, size - 10)} />
+    </span>
+  );
+}
+
+function WalletControl({ wallet, open, onOpen, onClose }: {
+  wallet: UseWalletResult;
+  open: boolean;
+  onOpen: () => void;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLElement>(null);
+  const connected = Boolean(wallet.account && wallet.selectedProvider);
+  const walletName = wallet.selectedProvider?.info.name ?? "Compatible wallet";
+  useEffect(() => {
+    if (!open) return;
+    const dialog = dialogRef.current;
+    const focusableSelector = "button:not(:disabled), a[href], select:not(:disabled), [tabindex]:not([tabindex='-1'])";
+    const frame = window.requestAnimationFrame(() => {
+      dialog?.querySelector<HTMLElement>(focusableSelector)?.focus();
+    });
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(focusableSelector));
+      if (!focusable.length) return;
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    document.body.classList.add("wallet-modal-open");
+    return () => {
+      window.cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.classList.remove("wallet-modal-open");
+      triggerRef.current?.focus();
+    };
+  }, [onClose, open]);
+  return (
+    <div className="wallet-control">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={`wallet-trigger ${connected ? "is-connected" : ""}`}
+        onClick={onOpen}
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        aria-label={connected ? `Wallet ${walletName}, account ${truncate(wallet.account ?? undefined, 6, 4)}` : "Connect test wallet with any compatible injected EVM wallet"}
+        data-testid="wallet-trigger"
+      >
+        <WalletProviderIcon provider={wallet.selectedProvider} size={30} />
+        <span>
+          <strong>{connected ? walletName : "Connect test wallet"}</strong>
+          <small>{connected ? truncate(wallet.account ?? undefined, 6, 4) : "Compatible injected EVM wallet"}</small>
+        </span>
+      </button>
+
+      {open && (
+        <div className="wallet-dialog-layer" role="presentation">
+          <button className="wallet-dialog-scrim" type="button" aria-label="Dismiss wallet dialog" onClick={onClose} />
+          <section ref={dialogRef} className="wallet-dialog" role="dialog" aria-modal="true" aria-labelledby="wallet-dialog-title">
+            <header>
+              <div><p className="eyebrow">Testnet access</p><h2 id="wallet-dialog-title">{connected ? "Wallet preflight" : "Choose a wallet"}</h2></div>
+              <button type="button" className="wallet-dialog-close" onClick={onClose} aria-label="Close wallet dialog"><Icon name="close" /></button>
+            </header>
+
+            {connected ? (
+              <div className="wallet-account-sheet">
+                <div className="wallet-account-identity">
+                  <WalletProviderIcon provider={wallet.selectedProvider} size={42} />
+                  <span><strong>{walletName}</strong><code>{wallet.account}</code></span>
+                </div>
+                <dl>
+                  <div><dt>Network</dt><dd>{wallet.chainId === "0x59f" ? "Injective EVM Testnet" : wallet.chainId ?? "Unknown"}</dd></div>
+                  <div><dt>Balance</dt><dd>{formatTestUsdc(wallet.usdcBalance)}</dd></div>
+                  <div><dt>Payment mode</dt><dd>Signed authorization · no wallet broadcast</dd></div>
+                </dl>
+                {wallet.error && <p className="wallet-inline-error" role="alert">{wallet.error}</p>}
+                <div className="wallet-dialog-actions">
+                  {wallet.status === "wrong-network" && <button type="button" className="wallet-primary" onClick={() => void wallet.switchNetwork()}>Switch to Injective testnet</button>}
+                  {wallet.status === "low-balance" && <button type="button" onClick={() => void wallet.watchAsset()}>Add test USDC token</button>}
+                  <button type="button" onClick={() => void wallet.refresh()}>Refresh preflight</button>
+                  <button type="button" onClick={() => {
+                    if (!wallet.account) return;
+                    void navigator.clipboard.writeText(wallet.account).then(() => setCopied(true)).catch(() => setCopied(false));
+                  }}>{copied ? "Address copied" : "Copy account address"}</button>
+                  <a href={`${TESTNET_EXPLORER}/address/${wallet.account}`} target="_blank" rel="noreferrer">Open explorer <Icon name="external" size={13} /></a>
+                  <button type="button" className="wallet-disconnect" onClick={() => { setCopied(false); wallet.disconnect(); }}>Choose another wallet</button>
+                </div>
+              </div>
+            ) : (
+              <div className="wallet-provider-list">
+                <p>Proofline discovers injected EIP‑1193 wallets through EIP‑6963. Choose the provider you want to use for this testnet run.</p>
+                {wallet.providers.length ? wallet.providers.map((provider) => (
+                  <button
+                    type="button"
+                    key={provider.id}
+                    onClick={() => void wallet.connect(provider)}
+                    disabled={wallet.status === "connecting"}
+                    data-testid="wallet-provider-option"
+                  >
+                    <WalletProviderIcon provider={provider} size={38} />
+                    <span><strong>{provider.info.name}</strong><small>{provider.source === "eip6963" ? "EIP‑6963 provider" : "Browser-injected provider"}</small></span>
+                    <Icon name="arrow" />
+                  </button>
+                )) : (
+                  <div className="wallet-empty-state" role="status">
+                    <Icon name="wallet" size={28} />
+                    <strong>No compatible injected wallet detected</strong>
+                    <p>Install or enable an EVM wallet that supports EIP‑712 typed-data signing, then scan again.</p>
+                    <button type="button" onClick={wallet.requestDiscovery}>Scan for wallets</button>
+                  </div>
+                )}
+                {wallet.error && <p className="wallet-inline-error" role="alert">{wallet.error}</p>}
+                <small className="wallet-trust-note">Provider names and icons are self-reported display metadata. Proofline never receives or stores a private key.</small>
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AppHeader({ integrations, mode = "replay", catalog, activeMatchId, onSelectMatch, matchSelectionDisabled = false, wallet, walletDialogOpen = false, onOpenWallet, onCloseWallet }: {
   integrations: IntegrationsResponse | null;
   mode?: string;
-  mcpRuntime?: McpRuntimeResponse | null;
+  catalog?: MatchCatalogResponse | null;
+  activeMatchId?: string | null;
+  onSelectMatch?: (id: string) => void;
+  matchSelectionDisabled?: boolean;
+  wallet?: UseWalletResult;
+  walletDialogOpen?: boolean;
+  onOpenWallet?: () => void;
+  onCloseWallet?: () => void;
 }) {
   const chain = !integrations
     ? { label: "checking", tone: "checking" }
@@ -216,18 +400,19 @@ function AppHeader({ integrations, mode = "replay", mcpRuntime = null }: {
         <img src="/favicon.svg" alt="" width="28" height="28" />
         <span>PROOF</span><i /><span>LINE</span>
       </a>
-      <div className="mode-lockup" aria-label="Data mode" data-mode={mode}>
-        <span className="mode-pulse" />
-        <div>
-          <strong>{mode.includes("replay") ? "Historical replay" : mode === "live" ? "Live evidence" : mode === "scheduled" ? "Scheduled evidence" : "Delayed evidence"}</strong>
-          <small>{mode.includes("replay") ? "Recorded evidence · not live" : mode === "live" ? "Provider data · live" : mode === "scheduled" ? "Fixture only · no score" : "Provider data · delayed"}</small>
-        </div>
-      </div>
+      {catalog?.matches.length && activeMatchId && onSelectMatch ? (
+        <label className="header-case-selector">
+          <span>Evidence case</span>
+          <select value={activeMatchId} onChange={(event) => onSelectMatch(event.target.value)} disabled={matchSelectionDisabled} data-testid="match-selector">
+            {catalog.matches.map((entry) => <option key={entry.id} value={entry.id}>{entry.label} · {entry.dataMode}</option>)}
+          </select>
+        </label>
+      ) : <div className="mode-lockup" aria-label="Data mode" data-mode={mode}><span className="mode-pulse" /><div><strong>Loading evidence</strong><small>Checking runtime state</small></div></div>}
       <div className="integration-strip" aria-label="Integration modes">
         <span><i className={chain.tone} />Injective {chain.label}</span>
-        <span><i className={x402.tone} />x402 {x402.label}</span>
-        <span><i className={mcpRuntime?.agentReady ? "ready" : mcpRuntime?.health === "stale" ? "configured" : "demo"} />Agent {mcpRuntime?.agentReady ? "ready" : mcpRuntime?.health === "stale" ? "stale" : "offline"}</span>
+        <span><i className={x402.tone} />x402 testnet {x402.label === "live" ? "ready" : x402.label}</span>
       </div>
+      {wallet && onOpenWallet && onCloseWallet && <WalletControl wallet={wallet} open={walletDialogOpen} onOpen={onOpenWallet} onClose={onCloseWallet} />}
     </header>
   );
 }
@@ -628,17 +813,6 @@ function AgentTrace({ snapshot, record, proof, decision, proofVerification, runt
   );
 }
 
-function getQuoteDetail(quote: PaymentQuote | null, key: string): string | undefined {
-  if (!quote) return undefined;
-  const accepts = (quote.body.accepts ?? quote.decodedRequirement?.accepts) as unknown;
-  const first = Array.isArray(accepts) ? accepts[0] : undefined;
-  if (first && typeof first === "object") {
-    const value = (first as Record<string, unknown>)[key];
-    if (typeof value === "string" || typeof value === "number") return String(value);
-  }
-  return undefined;
-}
-
 function VerificationLayers({ verification }: { verification: ProofVerificationResponse | null }) {
   const integrity = verification?.integrity?.valid;
   const signature = verification?.signature?.valid;
@@ -665,16 +839,30 @@ function VerificationLayers({ verification }: { verification: ProofVerificationR
   );
 }
 
-function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareReplay, onClose, onProof, onVerification }: {
+function isFullyVerifiedProof(verification: ProofVerificationResponse | null): boolean {
+  return Boolean(
+    verification?.valid &&
+    verification.integrity?.valid === true &&
+    verification.signature?.valid === true &&
+    verification.onchain.checked === true &&
+    verification.onchain.valid === true,
+  );
+}
+
+function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay, integrations, wallet, onOpenWallet, onPrepareProof, onClose, onProof, onVerification, onLockChange }: {
   open: boolean;
+  presentation?: "overlay" | "embedded";
   matchId: string;
   eventId: string;
   replay: ReplaySnapshot | null;
   integrations: IntegrationsResponse | null;
-  onPrepareReplay: (eventId: string, signal?: AbortSignal) => Promise<ReplaySnapshot>;
+  wallet: UseWalletResult;
+  onOpenWallet: () => void;
+  onPrepareProof: (eventId: string, signal?: AbortSignal) => Promise<void>;
   onClose: () => void;
   onProof: (proof: ProofPacketResponse | null) => void;
   onVerification: (verification: ProofVerificationResponse | null) => void;
+  onLockChange?: (locked: boolean) => void;
 }) {
   const [status, setStatus] = useState<DrawerStatus>("idle");
   const [quote, setQuote] = useState<PaymentQuote | null>(null);
@@ -683,7 +871,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
   const [walletAccount, setWalletAccount] = useState<string | null>(null);
   const [paymentNonce, setPaymentNonce] = useState<string | null>(null);
   const [signingStep, setSigningStep] = useState<BrowserSigningStep | null>(null);
-  const [tamperResult, setTamperResult] = useState<"idle" | "running" | "passed" | "failed">("idle");
+  const [tamperResult, setTamperResult] = useState<"idle" | "running" | "passed" | "failed" | "unavailable">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   // A live PAYMENT-SIGNATURE is deliberately ephemeral: it exists only in this
@@ -698,6 +886,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
   const onVerificationRef = useRef(onVerification);
   const targetKey = `${matchId}:${eventId}`;
   const targetKeyRef = useRef(targetKey);
+  const walletEpochRef = useRef(wallet.walletEpoch);
   drawerActiveRef.current = open;
   onVerificationRef.current = onVerification;
   targetKeyRef.current = targetKey;
@@ -709,6 +898,12 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     "recovering",
     "uncertain",
   ].includes(status);
+  const walletName = wallet.selectedProvider?.info.name ?? "your selected wallet";
+
+  useEffect(() => {
+    onLockChange?.(closeLocked);
+    return () => onLockChange?.(false);
+  }, [closeLocked, onLockChange]);
 
   const isCurrentOperation = (operation: DrawerOperation): boolean =>
     drawerActiveRef.current &&
@@ -755,12 +950,12 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
   }, [closeLocked, onClose, status]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || presentation !== "overlay") return;
     closeButton.current?.focus();
-  }, [open]);
+  }, [open, presentation]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || presentation !== "overlay") return;
     const listener = (event: KeyboardEvent) => { if (event.key === "Escape") handleClose(); };
     document.addEventListener("keydown", listener);
     document.body.classList.add("drawer-open");
@@ -768,7 +963,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
       document.removeEventListener("keydown", listener);
       document.body.classList.remove("drawer-open");
     };
-  }, [handleClose, open]);
+  }, [handleClose, open, presentation]);
 
   useEffect(() => {
     if (!open || !closeLocked) return;
@@ -799,6 +994,23 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     setMessage(null);
   }, [eventId, matchId, open]);
 
+  useEffect(() => {
+    if (walletEpochRef.current === wallet.walletEpoch) return;
+    walletEpochRef.current = wallet.walletEpoch;
+    if (!["quoted", "signature-ready", "authorizing", "binding-ready", "binding"].includes(status)) return;
+    operationEpochRef.current += 1;
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    pendingAuthorizationRef.current = null;
+    paymentSignatureRef.current = null;
+    setQuote(null);
+    setSigningStep(null);
+    setWalletAccount(null);
+    setPaymentNonce(null);
+    setStatus("idle");
+    setMessage("The connected wallet, account, or network changed. The previous quote and in-memory authorization were discarded; no payment was submitted.");
+  }, [status, wallet.walletEpoch]);
+
   const acceptDeliveredProof = async (
     result: ProofPacketResponse,
     operation: DrawerOperation,
@@ -807,7 +1019,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     if (!isCurrentOperation(operation)) return;
     setProof(result);
     onProof(result);
-    setStatus("paid");
+    setStatus("verifying");
     try {
       const checked = await api.verifyProof(
         result.packet,
@@ -816,9 +1028,14 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
       if (!isCurrentOperation(operation)) return;
       setVerification(checked);
       onVerification(checked);
-      if (!checked.valid) {
-        setMessage("Report delivered and payment will not be repeated. Verification completed with a failed layer; inspect its evidence below.");
-      } else if (recovered) {
+      const fullyVerified = isFullyVerifiedProof(checked);
+      if (!fullyVerified) {
+        setStatus("delivered-unverified");
+        setMessage("Report delivered and payment will not be repeated. Settlement remains held because integrity, issuer, and a fresh Registry v3 lookup have not all passed.");
+      } else {
+        setStatus("paid");
+      }
+      if (fullyVerified && recovered) {
         setMessage(
           result.correction?.applied
             ? "Recovered the existing settled report and corrected its legacy replay timestamp. No wallet opened, no facilitator was called, and no payment was repeated."
@@ -827,6 +1044,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
       }
     } catch (cause) {
       if (isAbortError(cause) || !isCurrentOperation(operation)) return;
+      setStatus("delivered-unverified");
       setMessage(
         `Report delivered; payment will not be repeated. Packet verification can be retried safely. ${
           cause instanceof Error ? cause.message : ""
@@ -914,7 +1132,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
         await acceptDeliveredProof(recovered, operation, true);
         return;
       }
-      await onPrepareReplay(eventId, operation.controller.signal);
+      await onPrepareProof(eventId, operation.controller.signal);
       if (!isCurrentOperation(operation)) return;
       await requestQuote(operation, true);
     } catch (cause) {
@@ -1005,14 +1223,21 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
 
   const startPaymentAuthorization = async () => {
     if (!quote) return;
-    const operation = beginOperation();
-    setMessage(null);
-    setSigningStep(null);
-
     if (quote.demoSignature) {
+      const operation = beginOperation();
+      setMessage(null);
+      setSigningStep(null);
       await deliverPayment(operation, quote.demoSignature, false);
       return;
     }
+    if (!wallet.selectedProvider || !wallet.account || wallet.status !== "ready") {
+      setMessage("Connect a compatible wallet, switch to Injective EVM Testnet, and confirm at least 0.01 test USDC before signing.");
+      onOpenWallet();
+      return;
+    }
+    const operation = beginOperation();
+    setMessage(null);
+    setSigningStep(null);
     if (!integrations) {
       setStatus("error");
       setMessage("Integration policy is not loaded; payment signing is disabled.");
@@ -1022,6 +1247,8 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     setStatus("authorizing");
     try {
       const authorization = await createBrowserPaymentAuthorization({
+        provider: wallet.selectedProvider.provider,
+        account: wallet.account,
         quote,
         sessionId: PROOFLINE_SESSION_ID,
         expectedAsset: integrations.x402.asset.address,
@@ -1055,14 +1282,21 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
       setMessage("The first authorization is no longer available. Start again from signature 1/2; no payment was submitted.");
       return;
     }
+    if (!wallet.selectedProvider || !wallet.account) {
+      setStatus("binding-ready");
+      setMessage("The wallet connection changed after signature 1/2. Discard the in-memory authorization and review the payment again; no payment was submitted.");
+      return;
+    }
     const operation = beginOperation();
     setStatus("binding");
     setSigningStep(2);
     setMessage(null);
     try {
-      // This function is called directly from the second button click so OKX
-      // receives a fresh browser user gesture and surfaces its confirmation.
+      // This function is called directly from the second button click so the
+      // selected wallet receives a fresh browser user gesture for confirmation.
       const payment = await completeBrowserPaymentSignature({
+        provider: wallet.selectedProvider.provider,
+        account: wallet.account,
         authorization: pending,
         onSigningStep: (step) => {
           if (isCurrentOperation(operation)) setSigningStep(step);
@@ -1105,6 +1339,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
   const retryVerification = async () => {
     if (!proof) return;
     const operation = beginOperation();
+    setStatus("verifying");
     setMessage(null);
     try {
       const checked = await api.verifyProof(
@@ -1114,8 +1349,10 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
       if (!isCurrentOperation(operation)) return;
       setVerification(checked);
       onVerification(checked);
+      setStatus(isFullyVerifiedProof(checked) ? "paid" : "delivered-unverified");
     } catch (cause) {
       if (isAbortError(cause) || !isCurrentOperation(operation)) return;
+      setStatus("delivered-unverified");
       setMessage(
         `Packet verification is still unavailable; no payment was repeated. ${
           cause instanceof Error ? cause.message : ""
@@ -1136,18 +1373,8 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     try {
       const response = await api.submitProofPayment(matchId, eventId, existingSignature);
       paymentSignatureRef.current = null;
-      onProof(response);
       if (!isCurrentOperation(operation)) return;
-      setProof(response);
-      setStatus("paid");
-      setMessage("The existing authorization delivered the report. The wallet was not asked to sign again.");
-      const checked = await api.verifyProof(
-        response.packet,
-        operation.controller.signal,
-      );
-      if (!isCurrentOperation(operation)) return;
-      setVerification(checked);
-      onVerification(checked);
+      await acceptDeliveredProof(response, operation, true);
     } catch (cause) {
       if (!isCurrentOperation(operation)) return;
       setStatus("uncertain");
@@ -1170,7 +1397,8 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
       setTamperResult(checked.valid ? "failed" : "passed");
     } catch (cause) {
       if (isAbortError(cause) || !isCurrentOperation(operation)) return;
-      setTamperResult("passed");
+      setTamperResult("unavailable");
+      setMessage(`Tamper control was unavailable; no PASS is claimed. ${cause instanceof Error ? cause.message : "The verifier could not be reached."}`);
     }
   };
 
@@ -1207,12 +1435,16 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
     "binding-ready",
     "binding",
     "settling",
+    "verifying",
+    "delivered-unverified",
     "uncertain",
     "recovering",
     "paid",
   ].includes(status);
   const secondSignatureComplete = [
     "settling",
+    "verifying",
+    "delivered-unverified",
     "uncertain",
     "recovering",
     "paid",
@@ -1224,28 +1456,46 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
   const replayProgress = replayTarget && replay.replay.totalFrames
     ? Math.min(100, (replay.replay.cursor / replay.replay.totalFrames) * 100)
     : 0;
+  const walletReady = wallet.status === "ready";
+  const flowStage = ["settling", "verifying", "delivered-unverified", "uncertain", "recovering", "paid"].includes(status)
+    ? 4
+    : ["signature-ready", "authorizing", "binding-ready", "binding"].includes(status)
+      ? 3
+      : ["quoted"].includes(status)
+        ? 2
+        : 1;
+  let quotedRequirement: X402Requirement | null = null;
+  if (quote) {
+    try {
+      quotedRequirement = readX402Requirement(quote);
+    } catch {
+      quotedRequirement = null;
+    }
+  }
+  const quotedPrice = quotedRequirement && /^\d+$/.test(quotedRequirement.amount)
+    ? formatTestUsdc(BigInt(quotedRequirement.amount))
+    : integrations?.x402.priceDisplay ?? "0.01 test USDC";
 
   return (
-    <div className="drawer-layer">
-      <button type="button" className="drawer-scrim" aria-label="Close proof report" onClick={handleClose} />
-      <aside className="proof-drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-heading" data-drawer-status={status}>
+    <div className={presentation === "overlay" ? "drawer-layer" : "proof-workflow-embedded"}>
+      {presentation === "overlay" && <button type="button" className="drawer-scrim" aria-label="Close proof report" onClick={handleClose} />}
+      <aside className={`proof-drawer ${presentation === "embedded" ? "is-embedded" : ""}`} role={presentation === "overlay" ? "dialog" : "region"} aria-modal={presentation === "overlay" ? true : undefined} aria-labelledby="drawer-heading" data-drawer-status={status}>
         <header>
-          <div><p className="eyebrow light">Premium verification report</p><h2 id="drawer-heading">x402 proof packet</h2></div>
-          <button ref={closeButton} type="button" className="drawer-close" onClick={handleClose} aria-label="Close proof report" data-close-locked={closeLocked}><Icon name="close" /></button>
+          <div><p className="eyebrow light">Judge task · paid proof</p><h2 id="drawer-heading">Pay once. Verify three ways.</h2></div>
+          {presentation === "overlay" && <button ref={closeButton} type="button" className="drawer-close" onClick={handleClose} aria-label="Close proof report" data-close-locked={closeLocked}><Icon name="close" /></button>}
         </header>
-        <div className="drawer-mode"><span>{isSandbox ? "SANDBOX" : livePaymentUsable ? "TESTNET" : "CONFIG REQUIRED"}</span><p>{isSandbox ? "Protocol-shaped negotiation. No value is transferred." : livePaymentUsable ? "A signed USDC authorization is validated and submitted for Injective testnet settlement." : "Live x402 is not ready. Proofline will fail closed before requesting a wallet signature."}</p></div>
+        <div className="drawer-mode"><span>{isSandbox ? "SANDBOX" : livePaymentUsable ? "TESTNET ONLY" : "CONFIG REQUIRED"}</span><p>{isSandbox ? "Protocol-shaped negotiation. No value is transferred." : livePaymentUsable ? "0.01 test USDC · 2 signatures · 1 payment · 0 wallet-broadcast transactions" : "Live x402 is not ready. Proofline will fail closed before requesting a wallet signature."}</p></div>
 
         <section className="price-ticket">
           <span>Verification packet</span><strong>{integrations?.x402.priceDisplay ?? "0.01 USDC"}</strong><small>Spend policy cap · 10,000 atomic USDC</small>
         </section>
 
-        <div className="payment-flow" aria-label="x402 payment flow">
-          <span className={status === "idle" || status === "preparing" || status === "quoting" ? "active" : "complete"}><i>1</i><b>Request</b><small>GET proof</small></span>
-          <Icon name="arrow" />
-          <span className={["quoted", "authorizing", "binding-ready", "binding", "settling", "uncertain", "recovering", "paid"].includes(status) ? "active" : ""}><i>2</i><b>402 quote</b><small>Inspect terms</small></span>
-          <Icon name="arrow" />
-          <span className={status === "paid" ? "complete" : ""}><i>3</i><b>Report</b><small>Verify hash</small></span>
-        </div>
+        <ol className="payment-flow payment-stage-rail" aria-label={`Payment stage ${flowStage} of 4`}>
+          {(["Wallet", "Review", "Sign", "Verify"] as const).map((label, index) => {
+            const step = index + 1;
+            return <li key={label} className={flowStage === step ? "active" : flowStage > step ? "complete" : ""}><i>{step}</i><span><b>{label}</b><small>{["Preflight", "Inspect terms", "2 confirmations", "3 proof layers"][index]}</small></span></li>;
+          })}
+        </ol>
 
         {showReplayPreflight && replay && (
           <section className={`proof-preflight ${status === "preparing" ? "is-preparing" : ""}`} data-testid="proof-preflight" aria-live="polite">
@@ -1265,20 +1515,51 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
             <button type="button" className="amber-button" onClick={() => void prepareAndRequestQuote()} disabled={status === "preparing"} data-testid="prepare-proof-report">{status === "preparing" ? `Preparing frame ${replay.replay.cursor}/${replay.replay.totalFrames}…` : testnetAnchorUsable ? "Prepare replay + testnet anchor" : integrations?.injective.mode === "injective-testnet" ? "Check anchor configuration" : "Prepare replay + demo commitment"}<Icon name="arrow" /></button>
           </section>
         )}
-        {status === "idle" && replayReady && paymentConfigurationReady && <div className="drawer-action"><p>Request the paid route without a signature to inspect its exact price, asset, network, and payee.</p><button type="button" className="amber-button" onClick={() => void requestQuote()} data-testid="request-proof-report">Request proof report <Icon name="arrow" /></button></div>}
+        {status === "idle" && replayReady && paymentConfigurationReady && isSandbox && (
+          <section className="wallet-preflight-card sandbox-boundary">
+            <p className="eyebrow">Local sandbox boundary</p>
+            <h3>Real wallet test is not simulated</h3>
+            <p>This runtime transfers no value and therefore does not ask a wallet to sign. Use <strong>No-wallet audit</strong> here, or open the production testnet deployment for the two-signature payment path.</p>
+          </section>
+        )}
+        {status === "idle" && replayReady && paymentConfigurationReady && !isSandbox && !walletReady && (
+          <section className="wallet-preflight-card" data-wallet-status={wallet.status}>
+            <p className="eyebrow">Stage 1 · Wallet preflight</p>
+            <h3>{wallet.account ? "Finish the testnet check" : "Connect a test wallet"}</h3>
+            <p>{wallet.status === "wrong-network"
+              ? "The selected wallet is connected to another network. Switch before Proofline requests any signature."
+              : wallet.status === "low-balance"
+                ? `This account has ${formatTestUsdc(wallet.usdcBalance)}. The proof costs 0.01 test USDC.`
+                : "Choose any compatible injected EVM wallet that supports EIP‑712 typed-data signing."}</p>
+            <button type="button" className="amber-button" onClick={onOpenWallet} data-testid="connect-wallet-action">
+              {wallet.account ? "Open wallet preflight" : "Connect test wallet"}<Icon name="arrow" />
+            </button>
+            <small>No private key leaves your wallet. No transaction is broadcast by the wallet.</small>
+          </section>
+        )}
+        {status === "idle" && replayReady && paymentConfigurationReady && !isSandbox && walletReady && <div className="drawer-action"><p><strong>{walletName}</strong> is ready on Injective EVM Testnet with {formatTestUsdc(wallet.usdcBalance)}. Freeze the proof and inspect the exact 402 terms before signing.</p><button type="button" className="amber-button" onClick={() => void prepareAndRequestQuote()} data-testid="request-proof-report">Review 0.01 test USDC proof <Icon name="arrow" /></button></div>}
         {status === "idle" && replayReady && !paymentConfigurationReady && <div className="drawer-error" role="alert">Live x402 is unavailable until both the facilitator and Injective testnet anchor runtime are configured. No wallet request can start.</div>}
-        {status === "quoting" && <div className="drawer-loading"><span /><p>Negotiating x402 terms…</p></div>}
+        {(status === "preparing" && !showReplayPreflight) && <div className="drawer-loading"><span /><p>Checking the anchored result before payment…</p></div>}
+        {status === "quoting" && <div className="drawer-loading"><span /><p>Freezing proof and negotiating x402 terms…</p></div>}
 
         {quote && (
           <section className="quote-sheet">
             <div className="quote-title"><span>HTTP</span><strong>402</strong><p>Payment Required</p></div>
-            <dl>
-              <div><dt>Network</dt><dd><code>{getQuoteDetail(quote, "network") ?? integrations?.x402.network ?? "eip155:1439"}</code></dd></div>
-              <div><dt>Asset</dt><dd><code>{truncate(getQuoteDetail(quote, "asset") ?? integrations?.x402.asset.address, 9, 7)}</code></dd></div>
-              <div><dt>Amount</dt><dd>{getQuoteDetail(quote, "amount") ?? integrations?.x402.priceAtomic ?? "10000"}</dd></div>
-              <div><dt>Pay to</dt><dd><code>{truncate(getQuoteDetail(quote, "payTo"), 9, 7)}</code></dd></div>
-              <div><dt>Header</dt><dd><code>PAYMENT-SIGNATURE</code></dd></div>
-            </dl>
+            <div className="quote-human-summary">
+              <strong>{quotedPrice}</strong>
+              <span>{quotedRequirement?.network === "eip155:1439" ? "Injective EVM Testnet" : quotedRequirement?.network ?? "Network unavailable"}</span>
+              <p>Two wallet confirmations produce one bound payment authorization. Your wallet broadcasts zero transactions.</p>
+            </div>
+            <details className="quote-technical-details">
+              <summary>Advanced payment terms</summary>
+              <dl>
+                <div><dt>Network</dt><dd><code>{quotedRequirement?.network ?? "Invalid quote"}</code></dd></div>
+                <div><dt>Asset</dt><dd><code>{truncate(quotedRequirement?.asset, 9, 7)}</code></dd></div>
+                <div><dt>Amount</dt><dd>{quotedRequirement?.amount ?? "Invalid quote"}</dd></div>
+                <div><dt>Pay to</dt><dd><code>{truncate(quotedRequirement?.payTo, 9, 7)}</code></dd></div>
+                <div><dt>Header</dt><dd><code>PAYMENT-SIGNATURE</code></dd></div>
+              </dl>
+            </details>
             {!isSandbox && (
               <div className="signature-sequence" data-testid="signature-sequence">
                 <span>2 signatures · 1 payment</span>
@@ -1288,7 +1569,8 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
                 </ol>
               </div>
             )}
-            {(status === "quoted" || status === "authorizing" || status === "settling" || status === "error") && <button type="button" className="amber-button" onClick={() => void startPaymentAuthorization()} disabled={status === "authorizing" || status === "settling"} data-testid="submit-proof-payment">{status === "authorizing" ? "Confirm 1/2 · USDC authorization" : status === "settling" ? (isSandbox ? "Settling sandbox receipt…" : "Submitting one bound payment…") : isSandbox ? "Run sandbox settlement" : "Open wallet · sign authorization 1/2"}<Icon name="arrow" /></button>}
+            {status === "quoted" && <button type="button" className="amber-button" onClick={() => isSandbox ? void startPaymentAuthorization() : setStatus("signature-ready")} data-testid="continue-to-signatures">{isSandbox ? "Run sandbox settlement" : "Continue to 2 wallet signatures"}<Icon name="arrow" /></button>}
+            {(status === "signature-ready" || status === "authorizing") && <button type="button" className="amber-button" onClick={() => void startPaymentAuthorization()} disabled={status === "authorizing"} data-testid="submit-proof-payment">{status === "authorizing" ? `Waiting for ${walletName}…` : `Authorize 0.01 test USDC · signature 1/2`}<Icon name="arrow" /></button>}
           </section>
         )}
 
@@ -1296,11 +1578,18 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
           <section className={`proof-binding-handoff ${status === "binding" ? "is-waiting" : ""}`} data-testid="proof-binding-handoff" role="status">
             <div className="binding-latch" aria-hidden="true"><span>01</span><i /><span>02</span></div>
             <p className="eyebrow">Signature 1/2 confirmed · no payment sent</p>
-            <h3>Open OKX for Proof binding</h3>
-            <p>Click the amber button below. This fresh click lets Chrome surface the second OKX confirmation instead of leaving it hidden in the extension. Proof binding names this report and does not authorize another transfer.</p>
-            <button type="button" className="amber-button" onClick={() => void completeProofBinding()} disabled={status === "binding"} data-testid="submit-proof-binding">{status === "binding" ? "Waiting for OKX confirmation…" : "Open OKX · sign Proof binding 2/2"}<Icon name="arrow" /></button>
+            <h3>Bind this exact proof in {walletName}</h3>
+            <p>Use the fresh button click below to surface signature 2/2 in the wallet you selected. This ProofPurchase signature binds the report, payer and session; it does not authorize a second transfer.</p>
+            <button type="button" className="amber-button" onClick={() => void completeProofBinding()} disabled={status === "binding"} data-testid="submit-proof-binding">{status === "binding" ? `Waiting for ${walletName}…` : `Bind proof in ${walletName} · signature 2/2`}<Icon name="arrow" /></button>
             <button type="button" className="binding-discard" onClick={discardPendingAuthorization} disabled={status === "binding"} data-testid="discard-payment-authorization">Discard authorization · submit nothing</button>
           </section>
+        )}
+
+        {(status === "settling" || status === "verifying") && (
+          <div className="drawer-loading settlement-progress" role="status">
+            <span />
+            <p>{status === "settling" ? "Submitting the one bound authorization to the facilitator…" : "Payment settled. Verifying packet integrity, issuer, and Registry v3…"}</p>
+          </div>
         )}
 
         {(status === "uncertain" || status === "recovering") && (
@@ -1319,7 +1608,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
 
         {proof && (
           <section className="proof-packet">
-            <div className="packet-seal"><Icon name="shield" /><span><strong>Report delivered</strong><small>{verification ? (verification.valid ? "Packet recomputation passed" : "Packet verification failed") : "Recomputing packet…"}</small></span></div>
+            <div className="packet-seal"><Icon name="shield" /><span><strong>{isFullyVerifiedProof(verification) ? "SAFE TO SETTLE" : "Report delivered · settlement held"}</strong><small>{verification ? (isFullyVerifiedProof(verification) ? "Integrity + issuer + Registry v3 passed" : "All three independent layers have not passed") : "Running independent verification…"}</small></span></div>
             <dl>
               <div><dt>Schema</dt><dd>{proof.packet.schema}</dd></div>
               <div><dt>Packet hash</dt><dd><code>{truncate(proof.packet.packetHash, 12, 10)}</code></dd></div>
@@ -1331,6 +1620,7 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
               <div><dt>Evidence score</dt><dd>{evidenceScore(proof.packet.verification.confidenceBps)}</dd></div>
               <div><dt>Settlement</dt><dd>{proof.packet.settlement.allowed ? "Allowed" : "Held"}</dd></div>
               {walletAccount && <div><dt>Payer</dt><dd><code>{truncate(walletAccount, 9, 7)}</code></dd></div>}
+              {proof.entitlement?.transactionHash && <div><dt>Payment receipt</dt><dd><a href={`${integrations?.injective.explorerUrl ?? TESTNET_EXPLORER}/tx/${proof.entitlement.transactionHash}`} target="_blank" rel="noreferrer">Open transaction <Icon name="external" size={12} /></a></dd></div>}
             </dl>
             <VerificationLayers verification={verification} />
             <div className="packet-checks">
@@ -1346,11 +1636,11 @@ function ProofDrawer({ open, matchId, eventId, replay, integrations, onPrepareRe
               <span className={verification?.onchain.checked && verification.onchain.valid ? "passed onchain" : verification?.onchain.checked ? "failed onchain" : "not-checked onchain"}><Icon name={verification?.onchain.checked && verification.onchain.valid ? "check" : verification?.onchain.checked ? "close" : "shield"} />{verification?.onchain.checked && verification.onchain.valid ? "Registry lookup verified" : verification?.onchain.checked ? "Registry lookup did not match" : "On-chain not checked"}</span>
             </div>
             {!verification && <button type="button" className="packet-retry" onClick={() => void retryVerification()}>Retry packet verification <Icon name="arrow" /></button>}
-            {verification && <button type="button" className={`packet-retry tamper-${tamperResult}`} onClick={() => void runTamperControl()} disabled={tamperResult === "running"} data-testid="tamper-control">{tamperResult === "idle" ? "Run tamper negative control" : tamperResult === "running" ? "Testing altered packet…" : tamperResult === "passed" ? "Tampered packet rejected · PASS" : "Tampered packet accepted · FAIL"}<Icon name={tamperResult === "passed" ? "check" : "arrow"} /></button>}
+            {verification && <button type="button" className={`packet-retry tamper-${tamperResult}`} onClick={() => void runTamperControl()} disabled={tamperResult === "running"} data-testid="tamper-control">{tamperResult === "idle" ? "Run tamper negative control" : tamperResult === "running" ? "Testing altered packet…" : tamperResult === "passed" ? "Tampered packet rejected · PASS" : tamperResult === "unavailable" ? "Tamper control unavailable · RETRY" : "Tampered packet accepted · FAIL"}<Icon name={tamperResult === "passed" ? "check" : "arrow"} /></button>}
           </section>
         )}
 
-        {message && <div className={status === "binding-ready" || (status === "paid" && verification?.valid) ? "drawer-notice" : "drawer-error"} role="alert">{message}</div>}
+        {message && <div className={status === "binding-ready" || (status === "paid" && isFullyVerifiedProof(verification)) ? "drawer-notice" : "drawer-error"} role="alert">{message}</div>}
         <footer><Icon name="wallet" /><p>Proofline never embeds a payer private key. Live mode validates the quoted network, asset, payee and spend cap before requesting an EIP-3009 signature from the connected wallet.</p></footer>
       </aside>
     </div>
@@ -1372,8 +1662,31 @@ export function App() {
     continueJudgeDemo,
     prepareReplayForProof,
   } = useReplay();
+  const walletMinimum = useMemo(() => {
+    try {
+      return BigInt(integrations?.x402.priceAtomic ?? "10000");
+    } catch {
+      return 10_000n;
+    }
+  }, [integrations?.x402.priceAtomic]);
+  const wallet = useWallet({
+    assetAddress: integrations?.x402.asset.address ?? null,
+    minimumUsdcBalance: walletMinimum,
+    rpcUrl: integrations?.injective.publicRpcUrl ?? "https://k8s.testnet.json-rpc.injective.network/",
+    explorerUrl: integrations?.injective.explorerUrl ?? TESTNET_EXPLORER,
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(null);
+  const [selectedMatchId, setSelectedMatchId] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    return new URL(window.location.href).searchParams.get("case");
+  });
+  const [experience, setExperience] = useState<Experience>(() => {
+    if (typeof window === "undefined") return "wallet";
+    const value = new URL(window.location.href).searchParams.get("experience");
+    return value === "audit" || value === "replay" ? value : "wallet";
+  });
+  const [walletDialogOpen, setWalletDialogOpen] = useState(false);
+  const [paymentFlowLocked, setPaymentFlowLocked] = useState(false);
   const [catalogDetail, setCatalogDetail] = useState<CatalogMatchDetail | null>(null);
   const [catalogDetailLoading, setCatalogDetailLoading] = useState(false);
   const [catalogDetailError, setCatalogDetailError] = useState<string | null>(null);
@@ -1384,16 +1697,40 @@ export function App() {
   const [proofVerification, setProofVerification] = useState<ProofVerificationResponse | null>(null);
   const previousReplayCursor = useRef(-1);
   const closeProofDrawer = useCallback(() => setDrawerOpen(false), []);
+  const openWalletDialog = useCallback(() => setWalletDialogOpen(true), []);
+  const closeWalletDialog = useCallback(() => setWalletDialogOpen(false), []);
 
   const defaultCatalogMatchId = catalog?.matches.find((entry) => entry.dataMode === "delayed")?.id
     ?? catalog?.matches[0]?.id
     ?? snapshot?.match.id
     ?? null;
-  const activeMatchId = selectedMatchId ?? defaultCatalogMatchId;
+  const selectedMatchExists = catalog?.matches.some((entry) => entry.id === selectedMatchId) ?? false;
+  const activeMatchId = selectedMatchExists ? selectedMatchId : defaultCatalogMatchId;
   const selectedCatalogMatch = useMemo(
     () => catalog?.matches.find((entry) => entry.id === activeMatchId),
     [activeMatchId, catalog],
   );
+
+  useEffect(() => {
+    if (!activeMatchId || typeof window === "undefined") return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("case", activeMatchId);
+    url.searchParams.set("experience", experience);
+    window.history.replaceState({ case: activeMatchId, experience }, "", url);
+  }, [activeMatchId, experience]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handlePopState = () => {
+      const url = new URL(window.location.href);
+      const requestedCase = url.searchParams.get("case");
+      const requestedExperience = url.searchParams.get("experience");
+      if (requestedCase) setSelectedMatchId(requestedCase);
+      setExperience(requestedExperience === "audit" || requestedExperience === "replay" ? requestedExperience : "wallet");
+    };
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
 
   useEffect(() => {
     if (!selectedCatalogMatch || selectedCatalogMatch.dataMode === "historical-replay") {
@@ -1470,6 +1807,7 @@ export function App() {
     proofVerification?.onchain.checked === true && proofVerification.onchain.valid === true;
   const conflictActive = Boolean(selected?.verification?.conflicts.length);
   const showReplay = !selectedCatalogMatch || selectedCatalogMatch.dataMode === "historical-replay";
+  const finalResultPending = Boolean(selectedCatalogMatch && selectedCatalogMatch.status !== "finished");
   const activeDataMode = selectedCatalogMatch?.dataMode ?? snapshot.mode;
   const proofMatchId = showReplay ? snapshot.match.id : selectedCatalogMatch.id;
   // The premium route is a settlement report, so it always binds the anchored
@@ -1484,22 +1822,131 @@ export function App() {
     eventId: proofEventId,
     replay: showReplay,
   };
+  const prepareTargetProof = async (eventId: string, signal?: AbortSignal): Promise<void> => {
+    if (showReplay) {
+      await prepareReplayForProof(eventId, signal);
+      return;
+    }
+    if (signal?.aborted) throw new DOMException("Proof preparation canceled.", "AbortError");
+    await api.verifyMatchAnchor(proofMatchId, eventId);
+    if (signal?.aborted) throw new DOMException("Proof preparation canceled.", "AbortError");
+  };
+  const chooseExperience = (next: Experience) => {
+    setExperience(next);
+    setProof(null);
+    setProofVerification(null);
+  };
+  const openConflictReplay = () => {
+    const replayMatchId = catalog?.matches.find((entry) => entry.dataMode === "historical-replay")?.id ?? snapshot.match.id;
+    setSelectedMatchId(replayMatchId);
+    setExperience("replay");
+  };
+  const experienceTabs = (
+    <div className="experience-tabs" role="tablist" aria-label="Judge experience">
+      {EXPERIENCE_OPTIONS.map(([id, label], index) => (
+        <button
+          key={id}
+          id={`experience-tab-${id}`}
+          type="button"
+          role="tab"
+          aria-selected={experience === id}
+          aria-controls={`experience-panel-${id}`}
+          tabIndex={experience === id ? 0 : -1}
+          onClick={() => chooseExperience(id)}
+          onKeyDown={(event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            event.preventDefault();
+            const direction = event.key === "ArrowRight" ? 1 : -1;
+            const nextIndex = (index + direction + EXPERIENCE_OPTIONS.length) % EXPERIENCE_OPTIONS.length;
+            const next = EXPERIENCE_OPTIONS[nextIndex]![0];
+            if (paymentFlowLocked && next !== experience) return;
+            chooseExperience(next);
+            window.requestAnimationFrame(() => document.getElementById(`experience-tab-${next}`)?.focus());
+          }}
+          disabled={paymentFlowLocked && experience !== id}
+          data-testid={`experience-${id}`}
+        >{label}</button>
+      ))}
+    </div>
+  );
+  const catalogActionPanel = selectedCatalogMatch ? (
+    <section className="judge-experience-panel" data-experience={experience}>
+      {experienceTabs}
+      <div id={`experience-panel-${experience}`} role="tabpanel" aria-labelledby={`experience-tab-${experience}`}>
+      {experience === "wallet" && selectedCatalogMatch.status !== "finished" ? (
+        <section className="scheduled-proof-hold" role="status">
+          <p className="eyebrow">Final-result policy</p>
+          <h2>Proof opens after full time.</h2>
+          <p>This fixture has no final score or settlement event. Proofline will not create a quote, request a wallet signature, or claim a result before the match ends and independent evidence converges.</p>
+          <dl><div><dt>Match state</dt><dd>{selectedCatalogMatch.status}</dd></div><div><dt>Payment</dt><dd>Not available</dd></div><div><dt>Settlement</dt><dd>Held</dd></div></dl>
+        </section>
+      ) : experience === "wallet" ? (
+        <ProofDrawer
+          open
+          presentation="embedded"
+          matchId={selectedCatalogMatch.id}
+          eventId={proofEventId}
+          replay={null}
+          integrations={integrations}
+          wallet={wallet}
+          onOpenWallet={openWalletDialog}
+          onPrepareProof={prepareTargetProof}
+          onClose={() => undefined}
+          onProof={setProof}
+          onVerification={setProofVerification}
+          onLockChange={setPaymentFlowLocked}
+        />
+      ) : experience === "audit" ? <NoWalletAudit /> : <ConflictReplayEntry onOpenReplay={openConflictReplay} />}
+      </div>
+    </section>
+  ) : null;
 
   return (
     <div className="app-shell">
-      <AppHeader integrations={integrations} mode={activeDataMode} mcpRuntime={mcpRuntime} />
-      <div className="replay-disclosure" role="status">
-        <strong>{activeDataMode === "historical-replay" ? "Historical replay · not live" : activeDataMode === "delayed" ? "Delayed snapshot · not live" : "Official schedule · no score"}</strong>
-        <span>{selectedCatalogMatch?.disclosure ?? snapshot.disclosure ?? snapshot.match.replayDisclosure}</span>
-        <small>{showReplay ? "All source timestamps and synthetic fault injection are disclosed." : "Provider, retrieval time, source snapshot hash, and adapter version are disclosed."}</small>
-      </div>
-
-      <MatchCatalogBar
+      <AppHeader
+        integrations={integrations}
+        mode={activeDataMode}
         catalog={catalog}
-        selectedId={activeMatchId ?? snapshot.match.id}
-        detail={catalogDetail}
-        onSelect={setSelectedMatchId}
+        activeMatchId={activeMatchId}
+        onSelectMatch={setSelectedMatchId}
+        matchSelectionDisabled={paymentFlowLocked}
+        wallet={wallet}
+        walletDialogOpen={walletDialogOpen}
+        onOpenWallet={openWalletDialog}
+        onCloseWallet={closeWalletDialog}
       />
+      <div className="task-brief-strip" role="status">
+        <strong>{activeDataMode === "historical-replay" ? "HISTORICAL REPLAY · NOT LIVE" : finalResultPending ? "SCHEDULED · NO RESULT" : "TESTNET ONLY"}</strong>
+        <span>{showReplay ? "Synthetic conflict is disclosed and no payment is required." : finalResultPending ? "Final proof and payment remain unavailable until independently verified full time." : "Connect → review 0.01 test USDC → sign twice → verify three proof layers."}</span>
+        <small>{showReplay ? "All source timestamps and fault injection remain visible." : finalResultPending ? "0 signatures · 0 payments" : "2 signatures · 1 payment · 0 wallet-broadcast transactions"}</small>
+      </div>
+      {!showReplay && (
+        <button
+          type="button"
+          className="mobile-next-action"
+          onClick={() => {
+            if (finalResultPending) {
+              chooseExperience("audit");
+              document.querySelector(".judge-workspace__action")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              return;
+            }
+            if (experience === "wallet" && integrations?.x402.mode !== "live") {
+              chooseExperience("audit");
+              document.querySelector(".judge-workspace__action")?.scrollIntoView({ behavior: "smooth", block: "start" });
+              return;
+            }
+            if (experience === "wallet" && !wallet.account) {
+              setWalletDialogOpen(true);
+              return;
+            }
+            document.querySelector(".judge-workspace__action")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+          data-testid="mobile-next-action"
+        >
+          <span>{finalResultPending ? "Inspect completed proof sample" : experience === "wallet" ? integrations?.x402.mode !== "live" ? "Open no-wallet audit" : wallet.account ? "Continue wallet proof" : "Connect test wallet" : experience === "audit" ? "Open no-wallet audit" : "Open conflict replay"}</span>
+          <Icon name="arrow" />
+        </button>
+      )}
 
       {error && <div className="inline-error" role="alert"><span>Signal interruption</span>{error}<button type="button" onClick={() => void load()}>Reconnect</button></div>}
       {snapshot.errors.map((runtimeError) => {
@@ -1583,7 +2030,7 @@ export function App() {
             <FundingReadiness integrations={integrations} />
           </details>
         </section>
-      </main></> : selectedCatalogMatch ? <CatalogMatchView match={selectedCatalogMatch} detail={catalogDetail} loading={catalogDetailLoading} detailError={catalogDetailError} onVerifyAnchor={() => api.verifyMatchAnchor(selectedCatalogMatch.id)} onOpenProof={openProofDrawer} onOpenReplay={() => setSelectedMatchId(snapshot.match.id)} /> : null}
+      </main></> : selectedCatalogMatch ? <CatalogMatchView match={selectedCatalogMatch} detail={catalogDetail} loading={catalogDetailLoading} detailError={catalogDetailError} actionPanel={catalogActionPanel} /> : null}
 
       <footer className="site-footer">
         <span>PROOFLINE / VARA ENGINE</span>
@@ -1592,6 +2039,7 @@ export function App() {
           <code>commit {BUILD_COMMIT.slice(0, 12)}</code>
           <code>release {RELEASE_ID}</code>
         </div>
+        <span className="footer-runtime">MCP runtime: {mcpRuntime?.agentReady ? "ready" : mcpRuntime?.health === "stale" ? "stale" : "not connected"}</span>
         <a href={integrations?.injective.explorerUrl ?? TESTNET_EXPLORER} target="_blank" rel="noreferrer">Injective testnet <Icon name="external" size={13} /></a>
       </footer>
 
@@ -1605,10 +2053,13 @@ export function App() {
         eventId={activeDrawerTarget.eventId}
         replay={activeDrawerTarget.replay ? snapshot : null}
         integrations={integrations}
-        onPrepareReplay={prepareReplayForProof}
+        wallet={wallet}
+        onOpenWallet={openWalletDialog}
+        onPrepareProof={prepareTargetProof}
         onClose={closeProofDrawer}
         onProof={setProof}
         onVerification={setProofVerification}
+        onLockChange={setPaymentFlowLocked}
       />
     </div>
   );

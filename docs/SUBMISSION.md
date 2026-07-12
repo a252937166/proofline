@@ -126,7 +126,8 @@ including a successful fresh on-chain verification of registry revision `1`.
 - issuer key IDs, valid-time history, and policy-versioned key rotation;
 - a second ProofPurchase EIP-712 authorization that explicitly binds the
   packet hash to payee, price, deadline, USDC nonce, and session;
-- two explicit wallet gestures so OKX surfaces both confirmations;
+- two explicit wallet gestures so compatible injected wallets surface both
+  confirmations;
 - durable frozen-packet entitlements, exact-signature in-flight recovery, and
   settled-report recovery without a second payment;
 - MCP server, runtime audit surface, Agent Skill, and hard spending caps;
