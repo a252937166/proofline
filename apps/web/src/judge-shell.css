@@ -992,6 +992,7 @@ body.wallet-modal-open {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 5px;
   list-style: none;
+  animation: none;
 }
 
 .payment-stage-rail li {
