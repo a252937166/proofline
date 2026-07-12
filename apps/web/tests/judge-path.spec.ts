@@ -847,14 +847,29 @@ test.describe("judge-first wallet workspace", () => {
     const metrics = await page.evaluate(() => {
       const action = document.querySelector<HTMLElement>("[data-testid='mobile-next-action']");
       const rect = action?.getBoundingClientRect();
+      const viewportWidth = document.documentElement.clientWidth;
+      const overflowSources = [...document.querySelectorAll<HTMLElement>("body *")]
+        .map((element) => {
+          const elementRect = element.getBoundingClientRect();
+          return {
+            selector: `${element.tagName.toLowerCase()}${element.className ? `.${String(element.className).trim().replace(/\s+/g, ".")}` : ""}`,
+            left: Math.round(elementRect.left * 10) / 10,
+            right: Math.round(elementRect.right * 10) / 10,
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+          };
+        })
+        .filter((entry) => entry.left < -0.5 || entry.right > viewportWidth + 0.5 || entry.scrollWidth > entry.clientWidth + 1)
+        .slice(0, 12);
       return {
         documentWidth: document.documentElement.scrollWidth,
-        viewportWidth: document.documentElement.clientWidth,
+        viewportWidth,
         actionHeight: rect?.height ?? 0,
         actionWidth: rect?.width ?? 0,
+        overflowSources,
       };
     });
-    expect(metrics.documentWidth).toBeLessThanOrEqual(metrics.viewportWidth);
+    expect(metrics.documentWidth, `Horizontal overflow sources: ${JSON.stringify(metrics.overflowSources)}`).toBeLessThanOrEqual(metrics.viewportWidth);
     expect(metrics.actionHeight).toBeGreaterThanOrEqual(44);
     expect(metrics.actionWidth).toBeGreaterThanOrEqual(44);
   });
