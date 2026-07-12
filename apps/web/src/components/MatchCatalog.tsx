@@ -306,7 +306,7 @@ export function CatalogMatchView({ match, detail, loading, detailError, actionPa
       </section>
 
       <aside className="judge-workspace__action" aria-label="Judge action panel">
-        <div className="judge-workspace__action-inner">
+        <div className="judge-workspace__action-inner" data-testid="judge-action-scrollport">
           {actionPanel ?? <div className="judge-workspace__action-empty"><strong>Choose an experience</strong><p>Connect a test wallet, audit an existing proof, or inspect a conflict replay.</p></div>}
         </div>
       </aside>

@@ -875,6 +875,7 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
   const [tamperResult, setTamperResult] = useState<"idle" | "running" | "passed" | "failed" | "unavailable">("idle");
   const [message, setMessage] = useState<string | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  const bindingButton = useRef<HTMLButtonElement>(null);
   // A live PAYMENT-SIGNATURE is deliberately ephemeral: it exists only in this
   // mounted drawer and is replayed for recovery without storage or logging.
   const paymentSignatureRef = useRef<string | null>(null);
@@ -905,6 +906,15 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
     onLockChange?.(closeLocked);
     return () => onLockChange?.(false);
   }, [closeLocked, onLockChange]);
+
+  useEffect(() => {
+    if (!open || status !== "binding-ready") return;
+    const frame = window.requestAnimationFrame(() => {
+      bindingButton.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      bindingButton.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [open, status]);
 
   const isCurrentOperation = (operation: DrawerOperation): boolean =>
     drawerActiveRef.current &&
@@ -1579,9 +1589,9 @@ function ProofDrawer({ open, presentation = "overlay", matchId, eventId, replay,
           <section className={`proof-binding-handoff ${status === "binding" ? "is-waiting" : ""}`} data-testid="proof-binding-handoff" role="status">
             <div className="binding-latch" aria-hidden="true"><span>01</span><i /><span>02</span></div>
             <p className="eyebrow">Signature 1/2 confirmed · no payment sent</p>
-            <h3>Bind this exact proof in {walletName}</h3>
-            <p>Use the fresh button click below to surface signature 2/2 in the wallet you selected. This ProofPurchase signature binds the report, payer and session; it does not authorize a second transfer.</p>
-            <button type="button" className="amber-button" onClick={() => void completeProofBinding()} disabled={status === "binding"} data-testid="submit-proof-binding">{status === "binding" ? `Waiting for ${walletName}…` : `Bind proof in ${walletName} · signature 2/2`}<Icon name="arrow" /></button>
+            <h3>Bind this exact proof to this session</h3>
+            <p id="proof-binding-explanation"><strong>{walletName}</strong> is selected. This fresh confirmation binds the report, payer and session; it cannot authorize another transfer.</p>
+            <button ref={bindingButton} type="button" className="amber-button" onClick={() => void completeProofBinding()} disabled={status === "binding"} data-testid="submit-proof-binding" aria-describedby="proof-binding-explanation">{status === "binding" ? `Waiting for ${walletName}…` : `Open ${walletName} · signature 2/2`}<Icon name="arrow" /></button>
             <button type="button" className="binding-discard" onClick={discardPendingAuthorization} disabled={status === "binding"} data-testid="discard-payment-authorization">Discard authorization · submit nothing</button>
           </section>
         )}

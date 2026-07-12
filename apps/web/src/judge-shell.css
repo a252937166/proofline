@@ -659,8 +659,13 @@ body.wallet-modal-open {
 .judge-workspace__action-inner {
   top: 104px;
   max-height: calc(100dvh - 124px);
+  overflow-x: hidden;
   overflow-y: auto;
-  overflow: hidden;
+  overscroll-behavior-y: contain;
+  scroll-padding-block: 18px;
+  scrollbar-color: var(--amber) #102c3a;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
   border-color: #294b58;
   background: var(--night);
   box-shadow: 0 18px 48px rgba(7, 26, 43, 0.17);
@@ -949,6 +954,14 @@ body.wallet-modal-open {
 
 .proof-binding-handoff h3 {
   max-width: 390px;
+}
+
+.proof-binding-handoff {
+  scroll-margin-block: 18px;
+}
+
+.proof-binding-handoff:focus-within {
+  box-shadow: 0 0 0 2px rgba(246, 183, 60, 0.22), 0 16px 34px rgba(2, 14, 22, 0.22);
 }
 
 .proof-packet .packet-seal strong {
