@@ -1,16 +1,16 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 
 import { PREVIOUSLY_VERIFIED_SAMPLE } from "../data/verifiedSample";
 import { api } from "../lib/api";
+import "../judge-workspace.css";
 import type {
   CatalogMatchDetail,
   EventObservation,
   MatchCatalogEntry,
   MatchCatalogResponse,
-  VerifyAnchorResponse,
 } from "../types";
 
-type AuditState = "idle" | "running" | "passed" | "held";
+type FreshCheckState = "idle" | "running" | "passed" | "failed";
 
 function shortHash(value: string | undefined, start = 12, end = 10): string {
   if (!value) return "Awaiting source detail";
@@ -56,11 +56,9 @@ function evidenceEvent(detail: CatalogMatchDetail | null) {
   return detail?.events.find((event) => event.eventId === "final-result") ?? detail?.events[0];
 }
 
-function PreviouslyVerifiedSample() {
+export function NoWalletAudit() {
   const sample = PREVIOUSLY_VERIFIED_SAMPLE;
-  const [freshCheck, setFreshCheck] = useState<
-    "idle" | "running" | "passed" | "failed"
-  >("idle");
+  const [freshCheck, setFreshCheck] = useState<FreshCheckState>("idle");
   const [freshMessage, setFreshMessage] = useState(
     "Run a fresh packet, issuer, and latest Registry v3 check without a wallet.",
   );
@@ -91,25 +89,21 @@ function PreviouslyVerifiedSample() {
     }
   };
   return (
-    <section className="previous-sample" aria-labelledby="previous-sample-heading" data-testid="previously-verified-sample">
-      <div className="sample-kicker">
-        <span>Previously verified sample</span>
+    <section className="judge-audit" aria-labelledby="no-wallet-audit-heading" data-testid="previously-verified-sample">
+      <div className="judge-audit__kicker">
+        <span>Completed payment audit</span>
         <strong>No wallet required</strong>
       </div>
-      <h2 id="previous-sample-heading">Audit a completed proof path.</h2>
-      <p>
-        This exact 2026 packet passed all three verification layers and a real
-        0.01 test-USDC x402 settlement on 11 Jul 2026. Opening it does not
-        connect a wallet, create a signature, or execute another payment.
-      </p>
+      <h2 id="no-wallet-audit-heading">Inspect a proof already purchased.</h2>
+      <p className="judge-audit__intro">Recompute the published packet, issuer signature, and latest Registry v3 commitment. This path never creates a new payment.</p>
 
-      <div className="sample-match">
+      <div className="judge-audit__match">
         <small>{sample.network}</small>
         <strong>{sample.label}</strong>
         <span>{sample.proof.evidenceScore}</span>
       </div>
 
-      <ol className="sample-layers" aria-label="Previously verified proof layers">
+      <ol className="judge-audit__layers" aria-label="Previously verified proof layers">
         {sample.proof.layers.map((layer, index) => (
           <li key={layer.id}>
             <span>{String(index + 1).padStart(2, "0")}</span>
@@ -119,7 +113,7 @@ function PreviouslyVerifiedSample() {
         ))}
       </ol>
 
-      <div className="sample-fresh-check" data-state={freshCheck} role="status">
+      <div className="judge-audit__check" data-state={freshCheck} role="status">
         <p>{freshMessage}</p>
         <button
           type="button"
@@ -135,21 +129,36 @@ function PreviouslyVerifiedSample() {
         </button>
       </div>
 
-      <details className="sample-technical">
-        <summary>Inspect published identifiers</summary>
-        <dl>
-          <div><dt>Evidence root</dt><dd><code title={sample.proof.evidenceRoot}>{shortHash(sample.proof.evidenceRoot)}</code></dd></div>
-          <div><dt>Packet hash</dt><dd><code title={sample.proof.packetHash}>{shortHash(sample.proof.packetHash)}</code></dd></div>
-          <div><dt>Trusted issuer</dt><dd><code title={sample.proof.issuerAddress}>{shortHash(sample.proof.issuerAddress, 9, 7)}</code></dd></div>
-        </dl>
+      <details className="judge-audit__details">
+        <summary>Technical identifiers and receipts</summary>
+        <div className="judge-audit__details-body">
+          <dl>
+            <div><dt>Evidence root</dt><dd><code title={sample.proof.evidenceRoot}>{shortHash(sample.proof.evidenceRoot)}</code></dd></div>
+            <div><dt>Packet hash</dt><dd><code title={sample.proof.packetHash}>{shortHash(sample.proof.packetHash)}</code></dd></div>
+            <div><dt>Trusted issuer</dt><dd><code title={sample.proof.issuerAddress}>{shortHash(sample.proof.issuerAddress, 9, 7)}</code></dd></div>
+          </dl>
+          <nav aria-label="No-wallet audit links">
+            <a href={sample.registry.url} target="_blank" rel="noreferrer">Verified contract ↗</a>
+            <a href={sample.anchor.url} target="_blank" rel="noreferrer">Anchor transaction ↗</a>
+            <a href={sample.x402.url} target="_blank" rel="noreferrer">x402 receipt ↗</a>
+            <a href={sample.auditJsonUrl} target="_blank" rel="noreferrer">Audit JSON ↗</a>
+          </nav>
+        </div>
       </details>
+    </section>
+  );
+}
 
-      <nav className="sample-links" aria-label="No-wallet audit links">
-        <a href={sample.registry.url} target="_blank" rel="noreferrer">Verified contract ↗</a>
-        <a href={sample.anchor.url} target="_blank" rel="noreferrer">Anchor transaction ↗</a>
-        <a href={sample.x402.url} target="_blank" rel="noreferrer">x402 receipt ↗</a>
-        <a href={sample.auditJsonUrl} target="_blank" rel="noreferrer">Raw audit JSON ↗</a>
-      </nav>
+export function ConflictReplayEntry({ onOpenReplay }: { onOpenReplay: () => void }) {
+  return (
+    <section className="judge-replay-entry" aria-labelledby="conflict-replay-heading">
+      <p className="judge-replay-entry__kicker">Why Proofline exists</p>
+      <h2 id="conflict-replay-heading">Watch conflicting evidence stop settlement.</h2>
+      <p>A disclosed historical replay injects one wrong card claim, quarantines settlement, then recovers only after independent evidence converges.</p>
+      <button type="button" onClick={onOpenReplay} data-testid="run-conflict-replay">
+        Watch conflict quarantine <span aria-hidden="true">→</span>
+      </button>
+      <small>Historical data · synthetic fault disclosed · no payment</small>
     </section>
   );
 }
@@ -187,6 +196,24 @@ function SourceLane({ observation, index, freshnessBps, freshnessStatus, ageSeco
   );
 }
 
+function SourceSignal({ observation, index }: { observation: EventObservation; index: number }) {
+  const hash = sourceSnapshotHash(observation);
+  return (
+    <article className="judge-source-signal" data-lane={index + 1}>
+      <div className="judge-source-signal__head">
+        <span>Source {String(index + 1).padStart(2, "0")}</span>
+        <i aria-hidden="true" />
+      </div>
+      <strong>{observation.source.label}</strong>
+      <div className="judge-source-signal__result">
+        <span>Reported result</span>
+        <b>{observationScore(observation)}</b>
+      </div>
+      <code title={hash}>{shortHash(hash, 8, 6)}</code>
+    </article>
+  );
+}
+
 export function MatchCatalogBar({ catalog, selectedId, detail, onSelect }: {
   catalog: MatchCatalogResponse | null;
   selectedId: string;
@@ -219,18 +246,17 @@ export function MatchCatalogBar({ catalog, selectedId, detail, onSelect }: {
   );
 }
 
-export function CatalogMatchView({ match, detail, loading, detailError, onVerifyAnchor, onOpenProof, onOpenReplay }: {
+export function CatalogMatchView({ match, detail, loading, detailError, actionPanel = null }: {
   match: MatchCatalogEntry;
   detail: CatalogMatchDetail | null;
   loading: boolean;
   detailError: string | null;
-  onVerifyAnchor: () => Promise<VerifyAnchorResponse>;
-  onOpenProof: () => void;
-  onOpenReplay: () => void;
+  actionPanel?: ReactNode;
+  /** Compatibility-only while the parent shell migrates to actionPanel. */
+  onVerifyAnchor?: () => Promise<unknown>;
+  onOpenProof?: () => void;
+  onOpenReplay?: () => void;
 }) {
-  const [auditState, setAuditState] = useState<AuditState>("idle");
-  const [anchorResult, setAnchorResult] = useState<VerifyAnchorResponse | null>(null);
-  const [auditError, setAuditError] = useState<string | null>(null);
   const hasScore = match.score !== null;
   const event = evidenceEvent(detail);
   const activeObservations = useMemo(
@@ -241,84 +267,91 @@ export function CatalogMatchView({ match, detail, loading, detailError, onVerify
   const hashesAttached = activeObservations.length > 0 && activeObservations.every((observation) => Boolean(sourceSnapshotHash(observation)));
   const scoresAgree = activeObservations.length > 1 && new Set(activeObservations.map(observationScore)).size === 1;
   const policyVerified = event?.verification?.state === "verified";
-  const auditPassed = groups.size >= 2 && hashesAttached && scoresAgree && policyVerified;
-
-  const verifyResult = async () => {
-    if (loading) return;
-    setAuditError(null);
-    setAuditState("running");
-    if (!auditPassed) {
-      window.setTimeout(() => setAuditState("held"), 380);
-      return;
-    }
-    try {
-      const result = await onVerifyAnchor();
-      setAnchorResult(result);
-      setAuditState("passed");
-    } catch (cause) {
-      setAuditError(cause instanceof Error ? cause.message : "The verified result could not be anchored.");
-      setAuditState("held");
-    }
-  };
+  const evidenceVerified = groups.size >= 2 && hashesAttached && scoresAgree && policyVerified;
+  const conflicts = event?.verification?.conflicts.length ?? 0;
+  const confidence = event?.verification?.confidenceBps;
+  const evidenceState = loading
+    ? "loading"
+    : evidenceVerified
+      ? "verified"
+      : event
+        ? "held"
+        : "pending";
 
   return (
-    <main className="catalog-match-view is-audit-led" data-testid="catalog-match-view">
-      <section className="catalog-result-card">
-        <div className="case-file-line"><span>CASE / M97</span><strong>Previously played · independently reviewable</strong></div>
-        <p className="eyebrow">2026 result desk · delayed evidence</p>
-        <h1>Verify the result,<br />not the refresh icon.</h1>
-        <p className="catalog-thesis">This match is finished. Proofline checks whether two independent source groups reported the same final score and attached auditable snapshots.</p>
-
-        <div className="catalog-status"><span>{match.dataMode.toUpperCase()}</span>{match.status === "finished" ? "FULL TIME" : "SCHEDULED"}</div>
-        <div className="catalog-score" aria-label={`${match.homeTeam} ${match.score?.home ?? 0}, ${match.awayTeam} ${match.score?.away ?? 0}`}>
-          <span>{match.homeTeam}</span><strong>{hasScore ? match.score!.home : "—"}</strong><i>:</i><strong>{hasScore ? match.score!.away : "—"}</strong><span>{match.awayTeam}</span>
-        </div>
-        <p className="catalog-fixture-meta">{formatKickoff(match.scheduledAt, match.scheduledDate)} · {match.venue}</p>
-
-        <div className="catalog-actions">
-          <button type="button" className="verify-2026-button" onClick={() => void verifyResult()} disabled={!hasScore || loading || auditState === "running"} data-testid="verify-2026-result">
-            <span>{auditState === "running" ? "Verifying & anchoring…" : auditState === "passed" ? "2026 evidence anchored" : "Verify this 2026 result"}</span>
-            <i aria-hidden="true">→</i>
-          </button>
-          <button type="button" className="replay-secondary-button" onClick={onOpenReplay} data-testid="run-conflict-replay">Run conflict replay</button>
-        </div>
-
-        <div className={`catalog-audit-result audit-${auditState}`} role="status" aria-live="polite" data-testid="catalog-audit-result">
-          <span aria-hidden="true" />
-          <div>
-            <strong>{auditState === "passed" ? "Independent evidence anchored" : auditState === "held" ? "Evidence audit held" : auditState === "running" ? "Comparing source lanes" : "No-wallet audit ready"}</strong>
-            <p>{auditState === "passed" ? `${groups.size} independent groups agree on ${observationScore(activeObservations[0]!)}. The API returned a matching ${anchorResult?.anchor.receipt.mode ?? "Injective"} commitment; x402 proof quote is now available.` : auditState === "held" ? auditError ?? "The API response did not satisfy every independent-source check. No verification claim was made." : auditState === "running" ? "Comparing attributed snapshots and preparing the matching Injective commitment." : "Checks source-group independence, score agreement, snapshot hashes, and policy state. It does not sign or spend."}</p>
-            {auditState === "passed" && <div className="audit-anchor-result"><code title={anchorResult?.evidenceRoot}>{shortHash(anchorResult?.evidenceRoot)}</code>{anchorResult?.anchor.receipt.explorerUrl && <a href={anchorResult.anchor.receipt.explorerUrl} target="_blank" rel="noreferrer">Open anchor ↗</a>}<button type="button" onClick={onOpenProof} data-testid="open-2026-proof">Request 2026 proof quote →</button></div>}
+    <main className="judge-workspace" data-testid="catalog-match-view">
+      <section className="judge-workspace__evidence" aria-labelledby="judge-match-heading">
+        <div className="judge-match-summary">
+          <div className="judge-match-summary__topline">
+            <span>FIFA World Cup 2026</span>
+            <strong>{match.dataMode.replaceAll("-", " ")} · {match.status === "finished" ? "Full time" : "Scheduled"}</strong>
+          </div>
+          <h1 id="judge-match-heading">{hasScore ? "One result. Two independent records." : "One fixture. No result yet."}</h1>
+          <p>{hasScore ? "Proofline compares attributed source snapshots before a result can become a purchasable settlement proof." : "Proofline keeps settlement closed until full time, independent source convergence, and a verified final event."}</p>
+          <div className="judge-match-score" aria-label={hasScore ? `${match.homeTeam} ${match.score!.home}, ${match.awayTeam} ${match.score!.away}` : `${match.homeTeam} versus ${match.awayTeam}, no score yet`}>
+            <span>{match.homeTeam}</span>
+            <strong>{hasScore ? match.score!.home : "—"}</strong>
+            <i>:</i>
+            <strong>{hasScore ? match.score!.away : "—"}</strong>
+            <span>{match.awayTeam}</span>
+          </div>
+          <div className="judge-match-summary__meta">
+            <span>{formatKickoff(match.scheduledAt, match.scheduledDate)}</span>
+            <span>{match.venue}</span>
           </div>
         </div>
-      </section>
 
-      <section className="catalog-trust-card" aria-labelledby="source-lanes-heading">
-        <div className="source-grid-heading">
-          <div><p className="eyebrow light">VAR source convergence</p><h2 id="source-lanes-heading">Two lanes. One result.</h2></div>
-          <span>{groups.size || "—"}/2 groups</span>
-        </div>
-        <p className="source-grid-disclosure">ESPN and FIFA are counted once each. Repeating either feed cannot add voting weight.</p>
+        <div className="judge-convergence" aria-labelledby="source-lanes-heading">
+          <div className="judge-convergence__heading">
+            <div><p>Source convergence</p><h2 id="source-lanes-heading">Independent lanes</h2></div>
+            <span>{groups.size || "—"}/2 groups</span>
+          </div>
 
-        {loading ? (
-          <div className="source-lanes-loading" role="status"><span /><p>Retrieving attributed source snapshots…</p></div>
-        ) : detailError ? (
-          <div className="source-lanes-error" role="alert"><strong>Source detail unavailable</strong><p>{detailError}</p></div>
-        ) : activeObservations.length ? (
-          <div className={`source-lanes ${auditState === "running" ? "is-scanning" : ""} ${auditState === "passed" ? "is-converged" : ""}`}>
-            {activeObservations.map((observation, index) => (
-              <SourceLane key={observation.id} observation={observation} index={index} freshnessBps={event?.verification?.breakdown.freshnessBps} freshnessStatus={match.freshnessStatus} ageSeconds={match.ageSeconds} />
-            ))}
-            <div className="source-convergence" aria-label="Independent sources converge on the same result">
-              <i aria-hidden="true" /><span>{scoresAgree ? "RESULTS MATCH" : "AWAITING MATCH"}</span><strong>{scoresAgree ? observationScore(activeObservations[0]!) : "—"}</strong>
+          {loading ? (
+            <div className="judge-convergence__empty" role="status">Retrieving attributed source snapshots…</div>
+          ) : detailError ? (
+            <div className="judge-convergence__empty is-error" role="alert"><strong>Source detail unavailable</strong><span>{detailError}</span></div>
+          ) : activeObservations.length ? (
+            <div className="judge-source-summary">
+              {activeObservations.slice(0, 2).map((observation, index) => (
+                <SourceSignal key={observation.id} observation={observation} index={index} />
+              ))}
+              <div className="judge-source-summary__junction" data-state={scoresAgree ? "matched" : "held"}>
+                <i aria-hidden="true" />
+                <span>{scoresAgree ? "Results match" : "Convergence held"}</span>
+                <strong>{scoresAgree ? observationScore(activeObservations[0]!) : "—"}</strong>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="source-lanes-error"><strong>No result evidence</strong><p>This case has no final observations to compare.</p></div>
-        )}
+          ) : (
+            <div className="judge-convergence__empty"><strong>No result evidence</strong><span>This case has no final observations to compare.</span></div>
+          )}
+        </div>
+
+        <div className="judge-evidence-verdict" data-state={evidenceState} role="status" aria-live="polite" data-testid="catalog-audit-result">
+          <div className="judge-evidence-verdict__signal"><span aria-hidden="true" /><p><small>Evidence convergence</small><strong>{evidenceVerified ? "Verified" : evidenceState === "held" ? "Held" : evidenceState === "loading" ? "Checking" : "Pending"}</strong></p></div>
+          <dl>
+            <div><dt>Evidence score</dt><dd>{confidence === undefined ? "—" : `${(confidence / 100).toFixed(1)} / 100`}</dd></div>
+            <div><dt>Source groups</dt><dd>{groups.size || "—"}</dd></div>
+            <div><dt>Active conflicts</dt><dd>{conflicts}</dd></div>
+          </dl>
+          <p>{evidenceVerified ? "Both source groups agree, carry snapshot hashes, and pass the deterministic evidence policy." : evidenceState === "held" ? "The current evidence does not satisfy every settlement condition." : "Waiting for independently attributable result evidence."}</p>
+        </div>
       </section>
 
-      <PreviouslyVerifiedSample />
+      <aside className="judge-workspace__action" aria-label="Judge action panel">
+        <div className="judge-workspace__action-inner">
+          {actionPanel ?? <div className="judge-workspace__action-empty"><strong>Choose an experience</strong><p>Connect a test wallet, audit an existing proof, or inspect a conflict replay.</p></div>}
+        </div>
+      </aside>
+
+      <details className="judge-source-details">
+        <summary><span>Source provenance details</span><small>Retrieval time, freshness policy and snapshot hashes</small></summary>
+        <div className="judge-source-details__body">
+          {activeObservations.map((observation, index) => (
+            <SourceLane key={observation.id} observation={observation} index={index} freshnessBps={event?.verification?.breakdown.freshnessBps} freshnessStatus={match.freshnessStatus} ageSeconds={match.ageSeconds} />
+          ))}
+        </div>
+      </details>
     </main>
   );
 }

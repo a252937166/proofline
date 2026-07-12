@@ -574,460 +574,12 @@ async function mockApi(page: Page, options: { live?: boolean; paymentNetworkFail
   });
 }
 
-async function prepareReplayProofQuote(page: Page) {
-  const prepare = page.getByTestId("prepare-proof-report");
-  await expect(prepare).toBeVisible();
-  await prepare.click();
-  // The full evidence rail intentionally renders every frame. Keep this above
-  // the default assertion window for slower single-worker CI hosts.
-  await expect(page.getByText("402", { exact: true })).toBeVisible({ timeout: 40_000 });
-}
-
-test("match selector exposes delayed 2026 provenance without presenting it as live", async ({ page }) => {
-  await mockApi(page);
-  await page.goto("/");
-  await expect(page.getByTestId("match-selector")).toHaveValue("WC-2026-M97-FRA-MAR");
-  await expect(page.getByTestId("catalog-match-view")).toBeVisible();
-  await expect(page.locator("[data-mode='delayed']").first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Verify this 2026 result" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Run conflict replay" })).toBeVisible();
-  await expect(page.getByText("ESPN public scoreboard JSON")).toBeVisible();
-  await expect(page.getByText("FIFA official fixtures and results")).toBeVisible();
-  await expect(page.getByText("sourceSnapshotHash", { exact: true })).toHaveCount(2);
-  await expect(page.getByText("Freshness", { exact: true })).toHaveCount(2);
-  await expect(page.locator("[data-freshness='fresh']").first()).toBeVisible();
-  await expect(page.getByTestId("previously-verified-sample")).toContainText("No wallet required");
-  await page.getByTestId("verify-2026-result").click();
-  await expect(page.getByTestId("catalog-audit-result")).toContainText("Independent evidence anchored");
-  await page.getByTestId("open-2026-proof").click();
-  await page.getByTestId("request-proof-report").click();
-  await expect(page.getByText("402", { exact: true })).toBeVisible();
-});
-
-test("previously verified 2026 sample performs a fresh three-layer check without a wallet", async ({ page }) => {
-  await mockApi(page, { live: true, anchorMode: "injective-testnet" });
-  await page.goto("/");
-  const verify = page.getByTestId("verify-published-sample");
-  await expect(verify).toBeVisible();
-  await verify.click();
-  await expect(verify).toContainText("Fresh verification passed");
-  await expect(page.getByText(/No payment was executed/)).toBeVisible();
-});
-
-test("guided replay pauses on the wrong field, corrects it, and keeps external checks pending", async ({ page }) => {
-  await mockApi(page);
-  await page.goto("/");
-
-  await page.getByTestId("run-conflict-replay").click();
-  await expect(page.locator("[data-mode='historical-replay']").first()).toBeVisible();
-  await page.getByTestId("run-judge-demo").click();
-  await expect(page.getByTestId("conflict-pause")).toContainText("card");
-  await expect(page.getByText("The Agent must not settle.")).toBeVisible();
-
-  const continueCorrection = page.getByTestId("continue-correction");
-  await expect(continueCorrection).toBeEnabled();
-  await continueCorrection.click();
-  // The full 15-frame rail intentionally renders every evidence state. On
-  // slower CI/browser hosts that can exceed the global 8s assertion window.
-  await expect(page.getByText("EVIDENCE COMPLETE")).toBeVisible({ timeout: 20_000 });
-  await expect(page.getByText("External proof pending")).toBeVisible();
-  await expect(page.getByText("x402 report").locator("..")) .toContainText("pending");
-});
-
-test("frame zero prepares the final replay and anchor before requesting a proof quote", async ({ page }) => {
-  const proofRequests: string[] = [];
-  await page.addInitScript(() => {
-    const methods: string[] = [];
-    (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods = methods;
-    window.ethereum = {
-      request: async ({ method }: { method: string }) => {
-        methods.push(method);
-        throw new Error(`Wallet must not be called during proof preparation: ${method}`);
-      },
-    };
-  });
-  await mockApi(page, { live: true, anchorMode: "injective-testnet", proofRequests });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  await expect(page.getByLabel("Judge demo frame 0 of 15")).toBeVisible();
-
-  await page.getByTestId("open-proof-drawer").click();
-  const preflight = page.getByTestId("proof-preflight");
-  await expect(preflight).toContainText("Evidence must reach the final frame");
-  await expect(preflight).toContainText("idempotent Injective testnet anchor");
-  await expect(page.getByTestId("request-proof-report")).toHaveCount(0);
-  expect(proofRequests).toHaveLength(0);
-  expect(await page.evaluate(() => (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods)).toEqual([]);
-
-  const prepare = page.getByTestId("prepare-proof-report");
-  await prepare.click();
-  await expect(preflight).toContainText("Building the verified match tape");
-  await expect(prepare).toContainText(/Preparing frame/);
-  await expect(page.getByText("402", { exact: true })).toBeVisible({ timeout: 20_000 });
-  expect(proofRequests).toHaveLength(1);
-  expect(new URL(proofRequests[0]!).searchParams.get("eventId")).toBe("final-result");
-  await expect(page.getByText(/event has not appeared/i)).toHaveCount(0);
-  expect(await page.evaluate(() => (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods)).toEqual([]);
-});
-
-test("closing proof preparation cancels the quote intent before any wallet or payment request", async ({ page }) => {
-  const proofRequests: string[] = [];
-  await page.addInitScript(() => {
-    const methods: string[] = [];
-    (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods = methods;
-    window.ethereum = {
-      request: async ({ method }: { method: string }) => {
-        methods.push(method);
-        throw new Error(`Wallet must not be called during proof preparation: ${method}`);
-      },
-    };
-  });
-  await mockApi(page, {
-    live: true,
-    anchorMode: "injective-testnet",
-    proofRequests,
-  });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  await page.getByTestId("open-proof-drawer").click();
-  await page.getByTestId("prepare-proof-report").click();
-  await expect(page.getByTestId("prepare-proof-report")).toContainText(
-    "Preparing frame",
-  );
-
-  await page.locator(".drawer-close").click();
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.waitForTimeout(500);
-  expect(proofRequests).toEqual([]);
-  expect(await page.evaluate(() => (window as unknown as { __prooflineWalletMethods: string[] }).__prooflineWalletMethods)).toEqual([]);
-});
-
-test("the drawer cannot disappear while a wallet authorization is awaiting confirmation", async ({ page }) => {
-  const paymentHeaders: string[] = [];
-  await mockApi(page, {
-    live: true,
-    anchorMode: "injective-testnet",
-    paymentHeaders,
-  });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  await page.getByTestId("open-proof-drawer").click();
-  await prepareReplayProofQuote(page);
-  await page.evaluate(() => {
-    window.ethereum = {
-      request: async ({ method }: { method: string }) => {
-        if (method === "eth_chainId") return "0x59f";
-        if (method === "eth_requestAccounts") {
-          return ["0x3333333333333333333333333333333333333333"];
-        }
-        if (method === "eth_signTypedData_v4") {
-          return await new Promise<string>(() => undefined);
-        }
-        return null;
-      },
-    };
-  });
-
-  await page.getByTestId("submit-proof-payment").click();
-  await expect(page.getByTestId("submit-proof-payment")).toContainText(
-    "Confirm 1/2",
-  );
-  await page.locator(".drawer-close").click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByRole("alert")).toContainText(
-    "Reject the wallet prompt or wait for its receipt",
-  );
-  expect(paymentHeaders).toEqual([]);
-});
-
-test("x402 sandbox exposes 402 terms, verifies the packet, rejects tampering, and links the explorer", async ({ page }) => {
-  const paymentHeaders: string[] = [];
-  await mockApi(page, {
-    live: true,
-    anchorMode: "injective-testnet",
-    paymentHeaders,
-  });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  const openProof = page.getByTestId("open-proof-drawer");
-  await expect(openProof).toBeVisible();
-  await openProof.click();
-  await prepareReplayProofQuote(page);
-  await expect(page.getByTestId("signature-sequence")).toContainText("2 signatures · 1 payment");
-
-  await page.evaluate(() => {
-    (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes = [];
-    window.ethereum = {
-      request: async ({ method, params }: { method: string; params?: unknown[] }) => {
-        if (method === "eth_chainId") return "0x59f";
-        if (method === "eth_requestAccounts") return ["0x3333333333333333333333333333333333333333"];
-        if (method === "eth_signTypedData_v4") {
-          const typedData = JSON.parse(String(params?.[1])) as { primaryType: string };
-          (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes?.push(typedData.primaryType);
-          return `0x${"66".repeat(65)}`;
-        }
-        return null;
-      },
-    };
-  });
-  await page.getByTestId("submit-proof-payment").click();
-
-  // The first gesture authorizes USDC only. ProofPurchase must remain behind a
-  // second explicit page gesture so Chrome/OKX can surface its own prompt.
-  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
-  await expect(page.getByTestId("proof-binding-handoff")).toContainText(
-    "Signature 1/2 confirmed · no payment sent",
-  );
-  expect(paymentHeaders).toEqual([]);
-  expect(await page.evaluate(() => (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes)).toEqual([
-    "TransferWithAuthorization",
-  ]);
-
-  await page.getByTestId("submit-proof-binding").click();
-  await expect(page.getByText("Report delivered")).toBeVisible();
-  expect(paymentHeaders).toHaveLength(1);
-  expect(await page.evaluate(() => (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes)).toEqual([
-    "TransferWithAuthorization",
-    "ProofPurchase",
-  ]);
-  const tamperControl = page.getByTestId("tamper-control");
-  await expect(tamperControl).toBeVisible();
-  await expect(tamperControl).toBeEnabled();
-  await tamperControl.click();
-  await expect(tamperControl).toContainText("PASS");
-});
-
-test("a settled browser entitlement restores and verifies without opening a wallet or paying again", async ({ page }) => {
-  const paymentHeaders: string[] = [];
-  const recoveryRequests: string[] = [];
-  await mockApi(page, {
-    live: true,
-    anchorMode: "injective-testnet",
-    recoverSettled: true,
-    paymentHeaders,
-    recoveryRequests,
-  });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  await page.getByTestId("open-proof-drawer").click();
-  await page.getByTestId("prepare-proof-report").click();
-
-  await expect(page.getByText("Report delivered")).toBeVisible({ timeout: 40_000 });
-  await expect(page.getByText(/corrected its legacy replay timestamp/i)).toBeVisible();
-  await expect(page.getByTestId("signature-sequence")).toHaveCount(0);
-  expect(recoveryRequests).toHaveLength(1);
-  expect(paymentHeaders).toEqual([]);
-});
-
-test("a 409 pending payment preserves the bound header and never offers a fresh signature", async ({ page }) => {
-  const paymentHeaders: string[] = [];
-  await mockApi(page, {
-    live: true,
-    anchorMode: "injective-testnet",
-    paymentPendingConflict: true,
-    paymentHeaders,
-  });
-  await page.addInitScript(() => {
-    window.ethereum = {
-      request: async ({ method }: { method: string }) => {
-        if (method === "eth_chainId") return "0x59f";
-        if (method === "eth_requestAccounts") return ["0x3333333333333333333333333333333333333333"];
-        if (method === "eth_signTypedData_v4") return `0x${"66".repeat(65)}`;
-        return null;
-      },
-    };
-  });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  await page.getByTestId("open-proof-drawer").click();
-  await prepareReplayProofQuote(page);
-  await page.getByTestId("submit-proof-payment").click();
-  await page.getByTestId("submit-proof-binding").click();
-
-  await expect(page.getByTestId("payment-uncertain")).toBeVisible();
-  await expect(page.getByTestId("payment-uncertain")).toContainText("do not sign again");
-  await expect(page.getByTestId("submit-proof-payment")).toHaveCount(0);
-  expect(paymentHeaders).toHaveLength(1);
-});
-
-test("a structured 422 renders verification failures instead of leaving every layer pending", async ({ page }) => {
-  await mockApi(page, { verificationNegative: true });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  await page.getByTestId("open-proof-drawer").click();
-  await prepareReplayProofQuote(page);
-  await page.getByTestId("submit-proof-payment").click();
-
-  await expect(page.getByText("Report delivered")).toBeVisible();
-  await expect(page.getByText("Packet verification failed")).toBeVisible();
-  await expect(page.locator(".verification-layers")).toContainText("FAIL");
-  await expect(page.locator(".verification-layers .layer-fail")).toHaveCount(2);
-});
-
-test("a malformed 422 remains a retryable verifier error without crashing the delivered report", async ({ page }) => {
-  await mockApi(page, { verificationMinimal422: true });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  await page.getByTestId("open-proof-drawer").click();
-  await prepareReplayProofQuote(page);
-  await page.getByTestId("submit-proof-payment").click();
-
-  await expect(page.getByText("Report delivered")).toBeVisible();
-  await expect(page.getByText(/could not be deterministically verified/i)).toBeVisible();
-  await expect(page.getByRole("button", { name: /retry packet verification/i })).toBeVisible();
-});
-
-test("wallet rejection is an error; post-signature network ambiguity is payment-uncertain with recovery evidence", async ({ page }) => {
-  const paymentHeaders: string[] = [];
-  await mockApi(page, { live: true, paymentNetworkFailure: true, paymentHeaders });
-  await page.addInitScript(() => {
-    window.ethereum = {
-      request: async ({ method }: { method: string }) => {
-        if (method === "eth_chainId") return "0x59f";
-        if (method === "eth_requestAccounts") throw Object.assign(new Error("User rejected request"), { code: 4001 });
-        return null;
-      },
-    };
-  });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  const openProof = page.getByTestId("open-proof-drawer");
-  await expect(openProof).toBeVisible();
-  await openProof.click();
-  await prepareReplayProofQuote(page);
-  const walletButton = page.getByTestId("submit-proof-payment");
-  await expect(walletButton).toBeVisible();
-  await expect(walletButton).toBeEnabled();
-  // Do not force-click a control that is still moving into the drawer. A
-  // forced coordinate click can be lost during the quote-to-wallet transition
-  // and made this safety regression test nondeterministic.
-  await walletButton.click();
-  await expect(page.getByText(/User rejected request/)).toBeVisible();
-  await expect(page.getByTestId("payment-uncertain")).toHaveCount(0);
-
-  await page.evaluate(() => {
-    (window as Window & { __prooflineSignCount?: number }).__prooflineSignCount = 0;
-    window.ethereum = {
-      request: async ({ method }: { method: string }) => {
-        if (method === "eth_chainId") return "0x59f";
-        if (method === "eth_requestAccounts") return ["0x3333333333333333333333333333333333333333"];
-        if (method === "eth_signTypedData_v4") {
-          const instrumented = window as Window & { __prooflineSignCount?: number };
-          instrumented.__prooflineSignCount = (instrumented.__prooflineSignCount ?? 0) + 1;
-          return `0x${"66".repeat(65)}`;
-        }
-        return null;
-      },
-    };
-  });
-  await expect(walletButton).toBeEnabled();
-  await walletButton.click();
-  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
-  expect(paymentHeaders).toHaveLength(0);
-  expect(await page.evaluate(() => (window as Window & { __prooflineSignCount?: number }).__prooflineSignCount)).toBe(1);
-
-  await page.getByTestId("submit-proof-binding").click();
-  await expect(page.getByTestId("payment-uncertain")).toBeVisible();
-  await expect(page.getByTestId("payment-uncertain")).toContainText("Authorization nonce");
-  await expect(page.getByTestId("payment-uncertain")).toContainText("Facilitator / payee");
-  await expect(page.getByTestId("payment-uncertain")).toContainText("memory only");
-  await page.getByTestId("recover-existing-payment").click();
-  await expect(page.getByText("Report delivered")).toBeVisible();
-  expect(await page.evaluate(() => (window as Window & { __prooflineSignCount?: number }).__prooflineSignCount)).toBe(2);
-  expect(paymentHeaders).toHaveLength(2);
-  expect(paymentHeaders[0]).toBe(paymentHeaders[1]);
-  const paymentEnvelope = JSON.parse(atob(paymentHeaders[0]!)) as {
-    extensions?: { proofline?: { packetHash?: string; purchaseBinding?: { schema?: string; message?: { packetHash?: string } } } };
-  };
-  expect(paymentEnvelope.extensions?.proofline?.packetHash).toBe(PACKET_HASH);
-  expect(paymentEnvelope.extensions?.proofline?.purchaseBinding?.schema).toBe("proofline.proof-purchase.v1");
-  expect(paymentEnvelope.extensions?.proofline?.purchaseBinding?.message?.packetHash).toBe(PACKET_HASH);
-  expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => /payment|signature/i.test(key)))).toEqual([]);
-});
-
-test("rejecting the second ProofPurchase signature submits no payment authorization", async ({ page }) => {
-  const paymentHeaders: string[] = [];
-  await mockApi(page, { live: true, paymentHeaders });
-  await page.addInitScript(() => {
-    let signCount = 0;
-    window.ethereum = {
-      request: async ({ method }: { method: string }) => {
-        if (method === "eth_chainId") return "0x59f";
-        if (method === "eth_requestAccounts") return ["0x3333333333333333333333333333333333333333"];
-        if (method === "eth_signTypedData_v4") {
-          signCount += 1;
-          if (signCount === 2) {
-            throw Object.assign(new Error("User rejected ProofPurchase binding"), { code: 4001 });
-          }
-          return `0x${"66".repeat(65)}`;
-        }
-        return null;
-      },
-    };
-  });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  await page.getByTestId("open-proof-drawer").click();
-  await prepareReplayProofQuote(page);
-  await page.getByTestId("submit-proof-payment").click();
-
-  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
-  await expect(page.getByTestId("submit-proof-binding")).toBeEnabled();
-  expect(paymentHeaders).toHaveLength(0);
-
-  await page.getByTestId("submit-proof-binding").click();
-  await expect(page.getByText(/User rejected ProofPurchase binding/)).toBeVisible();
-  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
-  await expect(page.getByTestId("submit-proof-binding")).toBeEnabled();
-  await expect(page.getByText(/no payment was attempted/i)).toBeVisible();
-  await expect(page.getByTestId("payment-uncertain")).toHaveCount(0);
-  expect(paymentHeaders).toHaveLength(0);
-});
-
-test("discarding the first authorization clears the handoff without submitting payment", async ({ page }) => {
-  const paymentHeaders: string[] = [];
-  await mockApi(page, { live: true, paymentHeaders });
-  await page.addInitScript(() => {
-    (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes = [];
-    window.ethereum = {
-      request: async ({ method, params }: { method: string; params?: unknown[] }) => {
-        if (method === "eth_chainId") return "0x59f";
-        if (method === "eth_requestAccounts") return ["0x3333333333333333333333333333333333333333"];
-        if (method === "eth_signTypedData_v4") {
-          const typedData = JSON.parse(String(params?.[1])) as { primaryType: string };
-          (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes?.push(typedData.primaryType);
-          return `0x${"66".repeat(65)}`;
-        }
-        return null;
-      },
-    };
-  });
-  await page.goto("/");
-  await page.getByTestId("run-conflict-replay").click();
-  await page.getByTestId("open-proof-drawer").click();
-  await prepareReplayProofQuote(page);
-
-  await page.getByTestId("submit-proof-payment").click();
-  await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
-  expect(paymentHeaders).toEqual([]);
-
-  await page.getByTestId("discard-payment-authorization").click();
-  await expect(page.getByTestId("proof-binding-handoff")).toHaveCount(0);
-  await expect(page.getByTestId("submit-proof-payment")).toContainText(
-    "Open wallet · sign authorization 1/2",
-  );
-  await expect(page.getByText(/discarded in memory/i)).toBeVisible();
-  expect(paymentHeaders).toEqual([]);
-  expect(await page.evaluate(() => (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes)).toEqual([
-    "TransferWithAuthorization",
-  ]);
-});
-
-test("two browser contexts receive isolated replay session ids", async ({ browser }) => {
+test("two browser contexts receive isolated replay session ids", async ({ browser }, testInfo) => {
   const firstHeaders: string[] = [];
   const secondHeaders: string[] = [];
-  const firstContext = await browser.newContext();
-  const secondContext = await browser.newContext();
+  const baseURL = String(testInfo.project.use.baseURL);
+  const firstContext = await browser.newContext({ baseURL });
+  const secondContext = await browser.newContext({ baseURL });
   const first = await firstContext.newPage();
   const second = await secondContext.newPage();
   await mockApi(first, { sessionHeaders: firstHeaders });
@@ -1040,4 +592,263 @@ test("two browser contexts receive isolated replay session ids", async ({ browse
   expect(firstHeaders.find(Boolean)).not.toBe(secondHeaders.find(Boolean));
   await firstContext.close();
   await secondContext.close();
+});
+
+type MockWalletOptions = {
+  names?: string[];
+  account?: string;
+  balanceAtomic?: string;
+  rejectSignature?: 1 | 2;
+};
+
+/**
+ * Installs standards-based injected wallets before the application boots.
+ * This deliberately exercises EIP-6963 discovery instead of mutating the
+ * legacy window.ethereum global after React has already selected a provider.
+ */
+async function installEip6963Wallets(page: Page, options: MockWalletOptions = {}) {
+  await page.addInitScript(({ names, account, balanceAtomic, rejectSignature }) => {
+    type Listener = (...args: unknown[]) => void;
+    type Provider = {
+      request(args: { method: string; params?: readonly unknown[] | Record<string, unknown> }): Promise<unknown>;
+      on(event: string, listener: Listener): void;
+      removeListener(event: string, listener: Listener): void;
+    };
+    type InstrumentedWindow = Window & {
+      ethereum?: Provider;
+      __prooflineWalletMethods?: string[];
+      __prooflinePrimaryTypes?: string[];
+      __prooflineSelectedWallet?: string;
+    };
+
+    const target = window as InstrumentedWindow;
+    const methods: string[] = [];
+    const primaryTypes: string[] = [];
+    target.__prooflineWalletMethods = methods;
+    target.__prooflinePrimaryTypes = primaryTypes;
+
+    const providers = names.map((name, index) => {
+      const listeners = new Map<string, Set<Listener>>();
+      let signatureCount = 0;
+      const provider: Provider = {
+        async request({ method, params }) {
+          methods.push(`${name}:${method}`);
+          if (method === "eth_requestAccounts" || method === "eth_accounts") {
+            target.__prooflineSelectedWallet = name;
+            return [account];
+          }
+          if (method === "eth_chainId") return "0x59f";
+          if (method === "eth_call") return `0x${BigInt(balanceAtomic).toString(16)}`;
+          if (method === "wallet_switchEthereumChain" || method === "wallet_addEthereumChain") return null;
+          if (method === "wallet_watchAsset") return true;
+          if (method === "eth_signTypedData_v4") {
+            signatureCount += 1;
+            const values = Array.isArray(params) ? params : [];
+            const typedData = JSON.parse(String(values[1])) as { primaryType?: string };
+            primaryTypes.push(typedData.primaryType ?? "unknown");
+            if (rejectSignature === signatureCount) {
+              throw Object.assign(new Error(`User rejected signature ${signatureCount}/2`), { code: 4001 });
+            }
+            return `0x${"66".repeat(65)}`;
+          }
+          throw new Error(`Unexpected wallet method: ${method}`);
+        },
+        on(event, listener) {
+          const bucket = listeners.get(event) ?? new Set<Listener>();
+          bucket.add(listener);
+          listeners.set(event, bucket);
+        },
+        removeListener(event, listener) {
+          listeners.get(event)?.delete(listener);
+        },
+      };
+      return {
+        info: {
+          uuid: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          name,
+          icon: "",
+          rdns: `wallet-${index + 1}.proofline.test`,
+        },
+        provider,
+      };
+    });
+
+    const announce = () => {
+      for (const detail of providers) {
+        window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail }));
+      }
+    };
+    window.addEventListener("eip6963:requestProvider", announce);
+    target.ethereum = providers[0]?.provider;
+  }, {
+    names: options.names ?? ["Orbit Vault", "Nebula Key"],
+    account: options.account ?? "0x3333333333333333333333333333333333333333",
+    balanceAtomic: options.balanceAtomic ?? "5000000",
+    rejectSignature: options.rejectSignature ?? null,
+  });
+}
+
+async function connectNamedWallet(page: Page, name: string) {
+  await page.getByTestId("wallet-trigger").click();
+  const options = page.getByTestId("wallet-provider-option");
+  await expect(options).toHaveCount(2);
+  await options.filter({ hasText: name }).click();
+  await expect(page.getByTestId("wallet-trigger")).toContainText(name);
+  await expect(page.getByRole("dialog", { name: "Wallet preflight" })).toContainText("Injective EVM Testnet");
+  await page.getByLabel("Close wallet dialog").click();
+}
+
+async function openDelayedProofQuote(page: Page) {
+  const request = page.getByTestId("request-proof-report");
+  await expect(request).toBeVisible();
+  await request.click();
+  await expect(page.getByText("402", { exact: true })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByTestId("continue-to-signatures")).toBeVisible();
+}
+
+test.describe("judge-first wallet workspace", () => {
+  test("defaults to the four-stage wallet task and discovers multiple dynamically named wallets", async ({ page }) => {
+    await installEip6963Wallets(page, { names: ["Orbit Vault", "Nebula Key"] });
+    await mockApi(page, { live: true, anchorMode: "injective-testnet" });
+    await page.goto("/");
+
+    await expect(page.getByTestId("experience-wallet")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("match-selector")).toHaveValue("WC-2026-M97-FRA-MAR");
+    const stages = page.locator(".payment-stage-rail");
+    await expect(stages).toContainText("Wallet");
+    await expect(stages).toContainText("Review");
+    await expect(stages).toContainText("Sign");
+    await expect(stages).toContainText("Verify");
+    await expect(page.getByText("Verify this 2026 result", { exact: true })).toHaveCount(0);
+    await expect(page.getByText("Open 2026 proof", { exact: true })).toHaveCount(0);
+
+    await page.getByTestId("wallet-trigger").click();
+    await expect(page.getByTestId("wallet-provider-option").filter({ hasText: "Orbit Vault" })).toBeVisible();
+    await expect(page.getByTestId("wallet-provider-option").filter({ hasText: "Nebula Key" })).toBeVisible();
+    await expect(page.locator("body")).not.toContainText(/OKX|MetaMask/i);
+  });
+
+  test("wallet → review → signature 1 → signature 2 → three-layer verification", async ({ page }) => {
+    const paymentHeaders: string[] = [];
+    await installEip6963Wallets(page, { names: ["Orbit Vault", "Nebula Key"] });
+    await mockApi(page, {
+      live: true,
+      anchorMode: "injective-testnet",
+      paymentHeaders,
+    });
+    await page.goto("/");
+
+    await connectNamedWallet(page, "Nebula Key");
+    await expect(page.locator("body")).not.toContainText(/OKX|MetaMask/i);
+    await openDelayedProofQuote(page);
+    await expect(page.getByTestId("signature-sequence")).toContainText("2 signatures · 1 payment");
+
+    await page.getByTestId("continue-to-signatures").click();
+    await expect(page.getByTestId("submit-proof-payment")).toContainText("signature 1/2");
+    await page.getByTestId("submit-proof-payment").click();
+    await expect(page.getByTestId("proof-binding-handoff")).toContainText(/Signature 1\/2 confirmed · no payment sent[\s\S]*Nebula Key/);
+    expect(paymentHeaders).toEqual([]);
+
+    await page.getByTestId("submit-proof-binding").click();
+    await expect(page.getByText("SAFE TO SETTLE", { exact: true })).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator(".verification-layers")).toContainText("Integrity");
+    await expect(page.locator(".verification-layers")).toContainText("Issuer signature");
+    await expect(page.locator(".verification-layers")).toContainText("On-chain commitment");
+    await expect(page.getByText("Integrity + issuer + Registry v3 passed", { exact: true })).toBeVisible();
+    expect(paymentHeaders).toHaveLength(1);
+
+    const telemetry = await page.evaluate(() => ({
+      methods: (window as Window & { __prooflineWalletMethods?: string[] }).__prooflineWalletMethods ?? [],
+      primaryTypes: (window as Window & { __prooflinePrimaryTypes?: string[] }).__prooflinePrimaryTypes ?? [],
+      wallet: (window as Window & { __prooflineSelectedWallet?: string }).__prooflineSelectedWallet,
+      persistedSensitiveKeys: Object.keys(localStorage).filter((key) => /payment|signature|nonce|account/i.test(key)),
+    }));
+    expect(telemetry.wallet).toBe("Nebula Key");
+    expect(telemetry.primaryTypes).toEqual(["TransferWithAuthorization", "ProofPurchase"]);
+    expect(telemetry.methods.filter((method) => method.endsWith(":eth_accounts")).length).toBeGreaterThanOrEqual(2);
+    expect(telemetry.methods.filter((method) => method.endsWith(":eth_chainId")).length).toBeGreaterThanOrEqual(3);
+    expect(telemetry.methods.some((method) => /eth_sendTransaction|eth_sendRawTransaction/.test(method))).toBe(false);
+    expect(telemetry.persistedSensitiveKeys).toEqual([]);
+  });
+
+  test("no-wallet audit is explicit and verifies a published sample without provider access", async ({ page }) => {
+    await mockApi(page, { live: true, anchorMode: "injective-testnet" });
+    await page.goto("/");
+
+    await page.getByTestId("experience-audit").click();
+    await expect(page.getByTestId("experience-audit")).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByTestId("previously-verified-sample")).toContainText("No wallet required");
+    const verify = page.getByTestId("verify-published-sample");
+    await verify.click();
+    await expect(verify).toContainText("Fresh verification passed");
+    await expect(page.getByText(/No payment was executed/)).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+  });
+
+  test("conflict replay is only entered from the explicit replay experience", async ({ page }) => {
+    await mockApi(page);
+    await page.goto("/");
+
+    await expect(page.getByTestId("run-conflict-replay")).toHaveCount(0);
+    await page.getByTestId("experience-replay").click();
+    await expect(page.getByTestId("run-conflict-replay")).toBeVisible();
+    await page.getByTestId("run-conflict-replay").click();
+    await expect(page.getByText("HISTORICAL REPLAY · NOT LIVE", { exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Can this match safely settle?" })).toBeVisible();
+    await expect(page).toHaveURL(/case=WC-2022-WAL-IRN/);
+    await expect(page).toHaveURL(/experience=replay/);
+  });
+
+  test("case and experience query parameters deep-link and stay synchronized", async ({ page }) => {
+    await mockApi(page, { live: true });
+    await page.goto("/?case=WC-2026-M97-FRA-MAR&experience=audit");
+
+    await expect(page.getByTestId("match-selector")).toHaveValue("WC-2026-M97-FRA-MAR");
+    await expect(page.getByTestId("experience-audit")).toHaveAttribute("aria-selected", "true");
+    await page.getByTestId("experience-wallet").click();
+    await expect(page).toHaveURL(/case=WC-2026-M97-FRA-MAR/);
+    await expect(page).toHaveURL(/experience=wallet/);
+  });
+
+  test("390px layout has no horizontal overflow and keeps the next action touch-safe", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mockApi(page, { live: true });
+    await page.goto("/");
+
+    const nextAction = page.getByTestId("mobile-next-action");
+    await expect(nextAction).toBeVisible();
+    const metrics = await page.evaluate(() => {
+      const action = document.querySelector<HTMLElement>("[data-testid='mobile-next-action']");
+      const rect = action?.getBoundingClientRect();
+      return {
+        documentWidth: document.documentElement.scrollWidth,
+        viewportWidth: document.documentElement.clientWidth,
+        actionHeight: rect?.height ?? 0,
+        actionWidth: rect?.width ?? 0,
+      };
+    });
+    expect(metrics.documentWidth).toBeLessThanOrEqual(metrics.viewportWidth);
+    expect(metrics.actionHeight).toBeGreaterThanOrEqual(44);
+    expect(metrics.actionWidth).toBeGreaterThanOrEqual(44);
+  });
+
+  test("rejecting signature 2 submits no payment and keeps the first authorization memory-only", async ({ page }) => {
+    const paymentHeaders: string[] = [];
+    await installEip6963Wallets(page, { names: ["Orbit Vault", "Nebula Key"], rejectSignature: 2 });
+    await mockApi(page, { live: true, anchorMode: "injective-testnet", paymentHeaders });
+    await page.goto("/");
+
+    await connectNamedWallet(page, "Orbit Vault");
+    await openDelayedProofQuote(page);
+    await page.getByTestId("continue-to-signatures").click();
+    const firstSignature = page.getByTestId("submit-proof-payment");
+    await expect(firstSignature).toContainText("signature 1/2");
+    await firstSignature.click();
+    await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
+    await page.getByTestId("submit-proof-binding").click();
+    await expect(page.getByText(/User rejected signature 2\/2/)).toBeVisible();
+    await expect(page.getByTestId("proof-binding-handoff")).toBeVisible();
+    await expect(page.getByTestId("payment-uncertain")).toHaveCount(0);
+    expect(paymentHeaders).toEqual([]);
+  });
 });

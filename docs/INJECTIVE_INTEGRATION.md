@@ -86,10 +86,11 @@ before signing. If the signed payment does not reach a final receipt inside the
 bounded window, the API returns `payment-uncertain` and instructs the caller to
 check Explorer/nonce state instead of paying again automatically. A second
 `ProofPurchase` EIP-712 signature explicitly binds the packet hash, payer,
-payee, amount, deadline, EIP-3009 nonce, and session. OKX receives the USDC
-authorization and ProofPurchase from two explicit page clicks, preventing the
-second confirmation from remaining hidden in the extension. In-flight recovery
-accepts only the exact original `PAYMENT-SIGNATURE`, retained in browser memory.
+payee, amount, deadline, EIP-3009 nonce, and session. Any compatible EIP-1193 /
+EIP-712 browser wallet receives the USDC authorization and ProofPurchase from
+two explicit page clicks, preventing the second confirmation from remaining
+hidden in the extension. In-flight recovery accepts only the exact original
+`PAYMENT-SIGNATURE`, retained in browser memory.
 After settlement, `/api/proofs/recover` uses only a non-spendable browser
 capability and never calls the facilitator or repeats payment.
 

@@ -22,32 +22,43 @@ settlement. Select a data mode and inspect its machine-readable disclosure:
 
 ## 90 seconds — run the judge demo
 
-1. On the default France–Morocco case, press **Verify this 2026 result**. Inspect
-   ESPN and FIFA as two separately hashed source lanes, the `98.25/100`
-   Evidence Score, and the recovered Registry v3 anchor.
-2. Open the x402 proof path, or open **Previously verified sample** without a
-   wallet. The published sample contains the full signed packet and links to
-   the real anchor and `0.01` test-USDC receipt.
-3. Press **Run conflict replay** to enter the deterministic control case.
-4. Press **Run the 90-second verification demo**.
-5. OpenFootball reports Wayne Hennessey's red card.
-6. The explicitly synthetic provider-lag observation reports yellow. Proofline
+1. On the default France–Morocco case, inspect ESPN and FIFA converging as two
+   separately hashed source lanes beside the one active judge task.
+2. Keep **Real wallet test** selected. Press **Connect test wallet**, choose any
+   compatible EIP-6963/EIP-1193 provider, and confirm the selected account is on
+   Injective EVM Testnet with at least `0.01` test USDC.
+3. Press **Review 0.01 test USDC proof**. Before signing, verify the exact
+   amount, network and payee plus the explicit policy: two signatures, one
+   payment, and zero wallet-broadcast transactions.
+4. Signature `1/2` authorizes one EIP-3009 transfer and remains in memory; no
+   payment is sent yet. Signature `2/2` binds the exact proof, payer and browser
+   session and does not authorize another transfer. Only then is the single
+   `PAYMENT-SIGNATURE` submitted.
+5. Confirm all three returned layers pass: packet integrity, EIP-712 trusted
+   issuer, and latest Registry v3 commitment.
+6. Switch to **No-wallet audit** to recompute the published sample without a
+   new payment or wallet request.
+7. Switch to **Conflict replay**, then press **Watch conflict quarantine** to
+   enter the deterministic control case.
+8. Press **Run the 90-second verification demo**.
+9. OpenFootball reports Wayne Hennessey's red card.
+10. The explicitly synthetic provider-lag observation reports yellow. Proofline
    pauses on the exact `card` mismatch, marks the event `contested`, and holds
    settlement.
-7. Press **Continue with provider correction**. FIFA corroborates red and the
+11. Press **Continue with provider correction**. FIFA corroborates red and the
    bad claim is retracted without deleting history.
-8. Late goals and full-time status produce the final 0–2 event.
-9. Inspect the Evidence Score. It is a deterministic policy score, **not a
+12. Late goals and full-time status produce the final 0–2 event.
+13. Inspect the Evidence Score. It is a deterministic policy score, **not a
    probability**. Only one representative from each independent source group
    contributes weight; duplicating one provider cannot manufacture quorum.
-10. Press **Inspect x402 + chain proof** and verify all three layers:
+14. Press **Inspect x402 + chain proof** and verify all three layers:
    packet integrity, EIP-712 trusted issuer, and match-wide latest on-chain
    commitment. If the drawer is opened before the final frame, press
    **Prepare replay + testnet anchor** first. That preflight advances only the
    disclosed evidence tape and server-funded idempotent testnet anchor; it does
    not open a wallet or request USDC. The wallet remains a separate action
    after the unsigned HTTP 402 terms are visible.
-11. Run the tamper check. A one-field mutation must fail integrity verification.
+15. Run the tamper check. A one-field mutation must fail integrity verification.
 
 The replay is permanently labelled **Historical Replay · Not Live**, and the
 injected yellow-card fault is permanently labelled synthetic.

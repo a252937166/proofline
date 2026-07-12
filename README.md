@@ -191,8 +191,14 @@ docs/               Architecture, trust, design and judging evidence
   uncertain outcomes remain pending across restarts instead of charging again.
 - A second `ProofPurchase` EIP-712 signature binds `packetHash`, payer, payee,
   amount, deadline, USDC nonce, and browser session. The UI requests it from a
-  separate, explicit page click so OKX surfaces confirmation `2/2`; signature
-  `1/2` remains in memory and no payment header is submitted between the two.
+  separate, explicit page click so compatible browser wallets surface
+  confirmation `2/2`; signature `1/2` remains in memory and no payment header
+  is submitted between the two. The flow is provider-neutral and falls back to
+  generic wallet copy when the injected provider cannot be identified.
+- Wallet selection uses EIP-6963 discovery with a standards-based
+  `window.ethereum` fallback. Provider name and icon are rendered from the
+  wallet the user actually selects; Proofline does not privilege or require a
+  wallet brand.
 - The browser persists only a high-entropy, non-spendable recovery capability,
   never `PAYMENT-SIGNATURE`. A settled report can be restored after reload or a
   Chrome restart without opening a wallet or calling the facilitator.
