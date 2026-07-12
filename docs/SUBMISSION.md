@@ -5,12 +5,14 @@
 **Proofline**<br>
 **Don’t trust the score. Re-run the proof.**
 
-- Demo: [proofline.axiqo.xyz](https://proofline.axiqo.xyz)
+- Real wallet test: [Wallet → Review → Sign → Verify](https://proofline.axiqo.xyz/?case=WC-2026-M97-FRA-MAR&experience=wallet)
+- No-wallet audit: [verify the published packet](https://proofline.axiqo.xyz/?case=WC-2026-M97-FRA-MAR&experience=audit)
+- Conflict replay: [watch conflict quarantine](https://proofline.axiqo.xyz/?case=WC-2022-WAL-IRN&experience=replay)
 - Source: [github.com/a252937166/proofline](https://github.com/a252937166/proofline)
 - Network: Injective EVM testnet, `eip155:1439`
 - Verified registry:
   [`0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1`](https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1?tab=contract)
-- Immutable source: [`global-cup-final`](https://github.com/a252937166/proofline/releases/tag/global-cup-final)
+- Immutable source: [`global-cup-final-v2`](https://github.com/a252937166/proofline/releases/tag/global-cup-final-v2)
 
 ## Short description
 
@@ -40,10 +42,12 @@ conflict penalties.
 
 The default screen is the primary 2026 product case: France 2–0 Morocco, an
 honest delayed result supported by separately hashed ESPN and FIFA source
-snapshots. One click recomputes the evidence, recovers its Registry v3 anchor,
-opens the x402 report, verifies the EIP-712 issuer, and performs a fresh
-latest-revision read. A previously settled packet can run the same three-layer
-check without a wallet.
+snapshots. The default judge path exposes that evidence immediately, then guides
+the judge through **Wallet → Review → Sign → Verify**: wallet preflight,
+an unsigned `0.01` test-USDC quote, two explicit signatures that create one
+bound payment authorization, and three independent verification layers. A
+previously settled packet can run the same packet, issuer, and latest-revision
+checks through the no-wallet audit without creating another payment.
 
 The secondary 90-second conflict-control replay uses Wales 0–2 IR Iran from the
 2022 World Cup. An explicitly synthetic provider fault changes Wayne
@@ -97,6 +101,20 @@ and `20.01 → 20.02` test USDC. Packet integrity, current issuer policy, and th
 fresh registry read all passed. The complete no-wallet evidence bundle is
 [data/evidence/featured-proof.json](../data/evidence/featured-proof.json).
 
+## Final release evidence
+
+The immutable judge release is
+[`global-cup-final-v2`](https://github.com/a252937166/proofline/releases/tag/global-cup-final-v2).
+It becomes the final submission only after the following consistency gate
+passes; no unreleased commit or CI run is claimed in advance.
+
+| Check | Stable evidence | Required final state |
+| --- | --- | --- |
+| Release source | [`global-cup-final-v2`](https://github.com/a252937166/proofline/releases/tag/global-cup-final-v2) | Tag resolves to the final submitted source revision |
+| CI and audit | [Proofline CI workflow](https://github.com/a252937166/proofline/actions/workflows/ci.yml) | The run for the release revision passes the complete check suite and high-severity audit gate |
+| Production build stamp | [`proofline.axiqo.xyz/release.json`](https://proofline.axiqo.xyz/release.json) and the page Footer | Live `sourceCommit`, displayed commit, and release tag resolve to the same source; release ID identifies `global-cup-final-v2` |
+| Release downloads | [Release assets](https://github.com/a252937166/proofline/releases/tag/global-cup-final-v2) | API/Web archives share the release ID and include their matching SHA-256 manifests |
+
 ## Agent and MCP evidence
 
 Proofline ships ten domain MCP tools and a project Agent Skill. A separate,
@@ -122,6 +140,8 @@ including a successful fresh on-chain verification of registry revision `1`.
   role controls, historical reads, latest-only settlement verification, fully
   immutable `Final`, and no concurrency-bypassing convenience writer;
 - real `0.01` native test-USDC x402 settlement;
+- dedicated `0.02` test-USDC judge dispenser with fixed asset/network/amount,
+  address/IP/global limits, HMAC-only IP persistence, and on-chain receipt;
 - EIP-712 issuer-signed portable packets with trusted-issuer enforcement;
 - issuer key IDs, valid-time history, and policy-versioned key rotation;
 - a second ProofPurchase EIP-712 authorization that explicitly binds the

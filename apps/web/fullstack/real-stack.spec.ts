@@ -35,7 +35,7 @@ test("real API delivers a proof, rejects a tamper, and the web keeps sandbox bou
   });
   expect(paidResponse.ok()).toBeTruthy();
   const paid = await paidResponse.json() as {
-    packet: Record<string, unknown> & { eventId: string };
+    packet: Record<string, unknown> & { eventId: string; packetHash: `0x${string}` };
     payment: { simulated?: boolean; valueTransferred?: boolean };
   };
   expect(paid.payment).toMatchObject({ simulated: true, valueTransferred: false });
@@ -56,13 +56,20 @@ test("real API delivers a proof, rejects a tamper, and the web keeps sandbox bou
   expect(verified.onchain.checked).toBe(process.env.PROOFLINE_FULLSTACK_TESTNET === "1");
 
   const tampered = structuredClone(paid.packet);
-  tampered.eventId = `${paid.packet.eventId}-tampered`;
+  const lastNibble = tampered.packetHash.at(-1)?.toLowerCase();
+  tampered.packetHash = `${tampered.packetHash.slice(0, -1)}${lastNibble === "0" ? "1" : "0"}` as `0x${string}`;
   const tamperedResponse = await request.post("/api/proofs/verify", {
     data: { packet: tampered },
   });
   expect(tamperedResponse.status()).toBe(422);
-  const tamperedReport = await tamperedResponse.json() as { valid?: boolean };
+  const tamperedReport = await tamperedResponse.json() as {
+    valid?: boolean;
+    recomputedPacketHash?: string;
+    checks?: Array<{ id: string; passed: boolean }>;
+  };
   expect(tamperedReport.valid).toBe(false);
+  expect(tamperedReport.recomputedPacketHash).not.toBe(tampered.packetHash);
+  expect(tamperedReport.checks?.find((check) => check.id === "packet-hash")?.passed).toBe(false);
 });
 
 test("real replay prepares final evidence before exposing its unsigned 402 quote", async ({ page }) => {

@@ -8,7 +8,8 @@ subtitles. Every scene retains a top-left chapter chip and top-right label:
 
 **Picture:** branded title card, then the hosted control room on the default
 2026 France–Morocco result. Show the ESPN and FIFA source lanes, then select
-“Verify this 2026 result”.
+“Real wallet test” and the four-stage **Wallet → Review → Sign → Verify**
+rail.
 
 **Narration:**
 
@@ -73,20 +74,26 @@ anchor transaction in Blockscout.
 
 ## n5 · x402 evidence for humans and agents
 
-**Picture:** open the proof drawer, show the initial HTTP 402 terms, then complete
-the paid test-USDC request. Cut to an MCP/Agent trace card listing tools and
-spend limits.
+**Picture:** connect a test wallet, use **Continue to proof review**, show the
+unsigned HTTP 402 terms, then hold on signature `1/2` and its explicit “no
+payment sent” state. Complete signature `2/2`, show the single Payment Receipt
+with its balance change and Blockscout link, then show all three verification
+layers passing. Cut to an MCP/Agent trace card listing tools and spend limits.
 
 **Narration:**
 
 > Basic match data stays free. The complete evidence packet is a premium x402
 > resource priced at zero point zero one test USDC on Injective. Before signing,
 > the client checks the network, canonical USDC contract, merchant, exact amount,
-> origin, and a hard spending ceiling. The quote freezes the packet identity, so
-> advancing the replay cannot swap evidence after approval. MCP tools expose the
-> same match, conflict, packet, and registry checks to Claude, Cursor, or another
-> agent. The Agent Skill forbids final conclusions before full time, refuses
-> unresolved conflicts, and never treats a demo receipt as an on-chain read.
+> origin, and a hard spending ceiling. The flow is Wallet, Review, Sign, and
+> Verify. The first signature authorizes one transfer but remains in memory; no
+> payment is sent. The second signature binds that exact proof, payer, and
+> session, producing one payment rather than a second transfer. The returned
+> receipt and three independent verification layers make the result inspectable.
+> MCP tools expose the same match, conflict, packet, and registry checks to
+> Claude, Cursor, or another agent. The Agent Skill forbids final conclusions
+> before full time, refuses unresolved conflicts, and never treats a demo receipt
+> as an on-chain read.
 
 ## n6 · Re-run the proof
 
@@ -97,15 +104,20 @@ and video-safe QR codes. Keep all content above y=905.
 
 > Proofline turns a reported score into a decision that another machine can audit.
 > The hosted replay works without a live match, while the public repository,
-> contract, transaction, and packet make every important claim inspectable. The
-> CCTP route is explicitly future work; we do not claim
-> a burn or mint that did not happen. Proofline: do not trust the score. Re-run
-> the proof.
+> contract, transaction, packet, and immutable global-cup-final-v2 release make
+> every important claim inspectable. Its release tag, CI result, downloadable
+> artifacts, and live build stamp all resolve to the same final source. The CCTP
+> route is explicitly future work; we do not claim a burn or mint that did not
+> happen. Proofline: do not trust the score. Re-run the proof.
 
 ## Public evidence to show when recording
 
-- Hosted demo: `https://proofline.axiqo.xyz`
+- Real wallet test: `https://proofline.axiqo.xyz/?case=WC-2026-M97-FRA-MAR&experience=wallet`
+- No-wallet audit: `https://proofline.axiqo.xyz/?case=WC-2026-M97-FRA-MAR&experience=audit`
+- Conflict replay: `https://proofline.axiqo.xyz/?case=WC-2022-WAL-IRN&experience=replay`
 - GitHub: `https://github.com/a252937166/proofline`
+- Immutable release: `https://github.com/a252937166/proofline/releases/tag/global-cup-final-v2`
+- CI workflow: `https://github.com/a252937166/proofline/actions/workflows/ci.yml`
 - Contract: `https://testnet.blockscout.injective.network/address/0x380D75d068dec45D8145ef89B7A40a6201Ac1ef1?tab=contract`
 - 2026 anchor transaction: `https://testnet.blockscout.injective.network/tx/0x24cd0ae9a40dbfdba14563f9f2932451624be63928667b629c4cadc86a507344`
 - 2026 x402 settlement: `https://testnet.blockscout.injective.network/tx/0x29237a0a3d501ca62882042313fcbb730fd91d152967430b2600545a227b842e`

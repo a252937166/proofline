@@ -135,6 +135,68 @@ describe("root environment loading", () => {
     ).toThrow("PROOFLINE_PROOF_ENTITLEMENT_FILE");
   });
 
+  it("keeps the judge test-USDC dispenser disabled by default and fail-closed when incomplete", () => {
+    expect(readRuntimeConfig({}).testUsdcDispenser).toMatchObject({
+      enabled: false,
+      configured: false,
+      chainId: 1439,
+      dailyClaimLimit: 50,
+    });
+    expect(
+      readRuntimeConfig({
+        PROOFLINE_TEST_USDC_DISPENSER_ENABLED: "true",
+      }).testUsdcDispenser,
+    ).toMatchObject({
+      enabled: true,
+      configured: false,
+      dailyClaimLimit: 50,
+    });
+  });
+
+  it("requires dedicated dispenser credentials and validates its bounded non-secret settings", () => {
+    const dispenserPrivateKey = generatePrivateKey();
+    expect(
+      readRuntimeConfig({
+        PROOFLINE_TEST_USDC_DISPENSER_ENABLED: "1",
+        PROOFLINE_TEST_USDC_DISPENSER_PRIVATE_KEY: dispenserPrivateKey,
+        PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY: "h".repeat(32),
+        PROOFLINE_TEST_USDC_DISPENSER_STATE_FILE:
+          "/tmp/proofline/test-usdc-dispenser.json",
+        PROOFLINE_TEST_USDC_DISPENSER_DAILY_CLAIM_LIMIT: "75",
+      }).testUsdcDispenser,
+    ).toMatchObject({
+      enabled: true,
+      configured: true,
+      dailyClaimLimit: 75,
+      stateFile: "/tmp/proofline/test-usdc-dispenser.json",
+    });
+    expect(() =>
+      readRuntimeConfig({
+        PROOFLINE_TEST_USDC_DISPENSER_ENABLED: "true",
+        PROOFLINE_TEST_USDC_DISPENSER_PRIVATE_KEY: dispenserPrivateKey,
+        ANCHOR_PRIVATE_KEY: dispenserPrivateKey,
+        PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY: "h".repeat(32),
+        PROOFLINE_TEST_USDC_DISPENSER_STATE_FILE:
+          "/tmp/proofline/test-usdc-dispenser.json",
+      }),
+    ).toThrow("must be a dedicated testnet-only wallet key");
+    expect(() =>
+      readRuntimeConfig({
+        PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY: "too-short",
+      }),
+    ).toThrow("PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY");
+    expect(() =>
+      readRuntimeConfig({
+        PROOFLINE_TEST_USDC_DISPENSER_DAILY_CLAIM_LIMIT: "0",
+      }),
+    ).toThrow("DAILY_CLAIM_LIMIT");
+    expect(() =>
+      readRuntimeConfig({
+        PROOFLINE_TEST_USDC_DISPENSER_ENABLED: "yes",
+      }),
+    ).toThrow("must be true, false, 1, or 0");
+  });
+
   it("requires HTTPS for remote trust endpoints and HTTP(S) on loopback", () => {
     expect(() =>
       readRuntimeConfig({ INJECTIVE_TESTNET_RPC: "http://rpc.example" }),

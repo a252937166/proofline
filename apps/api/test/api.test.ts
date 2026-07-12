@@ -1,5 +1,9 @@
 import request from "supertest";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildProofPacket } from "@proofline/core";
+import type { Address, Hex } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +18,13 @@ import {
   proofPurchaseMessage,
   signProofPurchase,
 } from "../src/purchase-binding.js";
+import { readRuntimeConfig } from "../src/config.js";
+import {
+  createTestUsdcDispenser,
+  TestUsdcDispenserError,
+  type TestUsdcChainClient,
+  type TestUsdcDispenser,
+} from "../src/test-usdc-dispenser.js";
 
 const MATCH_ID = "WC-2022-WAL-IRN";
 const ISSUER_PRIVATE_KEY = generatePrivateKey();
@@ -80,10 +91,12 @@ describe("Proofline API", () => {
   function boot(
     env: NodeJS.ProcessEnv = { NODE_ENV: "test" },
     anchorService?: AnchorService,
+    testUsdcDispenser?: TestUsdcDispenser,
   ): ApiRuntime {
     runtime = createApi({
       env,
       ...(anchorService ? { anchorService } : {}),
+      ...(testUsdcDispenser ? { testUsdcDispenser } : {}),
     });
     return runtime;
   }
@@ -1418,5 +1431,284 @@ describe("Proofline API", () => {
         expect(response.headers["retry-after"]).toBe("300");
         expect(response.body.error).toBe("proof_quote_rate_limited");
       });
+  });
+
+  it("serves fixed judge test-USDC claims and enforces address, balance, and IP limits", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "proofline-dispenser-api-"));
+    const stateFile = join(directory, "claims.json");
+    const privateKey = generatePrivateKey();
+    const ipHashKey = "i".repeat(32);
+    let broadcastCount = 0;
+    const fundedRecipient = `0x${"f".repeat(40)}` as Address;
+    const chainClient: TestUsdcChainClient = {
+      preflight: vi.fn(async (recipient) => {
+        if (recipient.toLowerCase() === fundedRecipient.toLowerCase()) {
+          throw new TestUsdcDispenserError(
+            "already_funded",
+            409,
+            "This address already has enough test USDC for the proof.",
+          );
+        }
+      }),
+      broadcast: vi.fn(async () => {
+        broadcastCount += 1;
+        return `0x${broadcastCount.toString(16).padStart(64, "0")}` as Hex;
+      }),
+      waitForConfirmation: vi.fn(async () => true),
+    };
+    const dispenser = createTestUsdcDispenser(
+      readRuntimeConfig({
+        PROOFLINE_TEST_USDC_DISPENSER_ENABLED: "true",
+        PROOFLINE_TEST_USDC_DISPENSER_PRIVATE_KEY: privateKey,
+        PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY: ipHashKey,
+        PROOFLINE_TEST_USDC_DISPENSER_STATE_FILE: stateFile,
+      }).testUsdcDispenser,
+      chainClient,
+    );
+
+    try {
+      const active = boot({ NODE_ENV: "test" }, undefined, dispenser);
+      const integrations = await request(active.app)
+        .get("/api/integrations")
+        .expect(200);
+      expect(integrations.body.testUsdcDispenser).toMatchObject({
+        mode: "enabled",
+        status: "configured-unverified",
+        configured: true,
+        amountAtomic: "20000",
+        amountDisplay: "0.02 test USDC",
+        limits: {
+          addressWindowHours: 24,
+          ipClaimsPerWindow: 5,
+          globalClaimsPerWindow: 50,
+        },
+      });
+      const serializedIntegrations = JSON.stringify(integrations.body);
+      expect(serializedIntegrations).not.toContain(privateKey);
+      expect(serializedIntegrations).not.toContain(ipHashKey);
+      expect(serializedIntegrations).not.toContain(stateFile);
+
+      await request(active.app)
+        .post("/api/testnet-usdc/claims")
+        .send({ recipient: "not-an-address" })
+        .expect(400)
+        .expect((response) => {
+          expect(response.body.error).toBe("invalid_recipient");
+        });
+
+      const ip = "198.51.100.30";
+      const firstRecipient = `0x${"1".padStart(40, "0")}`;
+      const first = await request(active.app)
+        .post("/api/testnet-usdc/claims")
+        .set("X-Forwarded-For", ip)
+        .send({ recipient: firstRecipient })
+        .expect(201);
+      expect(first.body).toMatchObject({
+        schema: "proofline.test-usdc-claim.v1",
+        status: "confirmed",
+        network: "eip155:1439",
+        chainId: 1439,
+        recipient: firstRecipient,
+        amountAtomic: "20000",
+        amountDisplay: "0.02 test USDC",
+        asset: { symbol: "USDC", decimals: 6 },
+      });
+      expect(first.body.transactionHash).toMatch(/^0x[0-9a-f]{64}$/);
+      expect(first.body.explorerUrl).toContain(first.body.transactionHash);
+
+      await request(active.app)
+        .post("/api/testnet-usdc/claims")
+        .set("X-Forwarded-For", ip)
+        .send({ recipient: firstRecipient })
+        .expect(429)
+        .expect((response) => {
+          expect(response.body.error).toBe("address_cooldown");
+          expect(Number(response.headers["retry-after"])).toBeGreaterThan(0);
+        });
+
+      await request(active.app)
+        .post("/api/testnet-usdc/claims")
+        .set("X-Forwarded-For", ip)
+        .send({ recipient: fundedRecipient })
+        .expect(409)
+        .expect((response) => {
+          expect(response.body.error).toBe("already_funded");
+        });
+
+      for (let index = 2; index <= 5; index += 1) {
+        await request(active.app)
+          .post("/api/testnet-usdc/claims")
+          .set("X-Forwarded-For", ip)
+          .send({
+            recipient: `0x${index.toString(16).padStart(40, "0")}`,
+          })
+          .expect(201);
+      }
+      await request(active.app)
+        .post("/api/testnet-usdc/claims")
+        .set("X-Forwarded-For", ip)
+        .send({ recipient: `0x${"6".padStart(40, "0")}` })
+        .expect(429)
+        .expect((response) => {
+          expect(response.body.error).toBe("ip_limit");
+        });
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await request(active.app)
+          .post("/api/testnet-usdc/claims")
+          .set("X-Forwarded-For", ip)
+          .send({
+            recipient: `0x${(7 + attempt).toString(16).padStart(40, "0")}`,
+          })
+          .expect(429)
+          .expect((response) => {
+            expect(response.body.error).toBe("ip_limit");
+          });
+      }
+      await request(active.app)
+        .post("/api/testnet-usdc/claims")
+        .set("X-Forwarded-For", ip)
+        .send({ recipient: fundedRecipient })
+        .expect(429)
+        .expect((response) => {
+          expect(response.body.error).toBe("test_usdc_claim_rate_limited");
+          expect(response.headers["retry-after"]).toBe("60");
+        });
+      expect(broadcastCount).toBe(5);
+
+      const persisted = readFileSync(stateFile, "utf8");
+      expect(persisted).not.toContain(ip);
+      expect(persisted).toContain('"amountAtomic": "20000"');
+      expect(statSync(stateFile).mode & 0o777).toBe(0o600);
+
+      const afterWindow = await dispenser.claim({
+        recipient: firstRecipient,
+        ip,
+        now: new Date(Date.now() + 24 * 60 * 60 * 1_000 + 1_000),
+      });
+      expect(afterWindow.status).toBe("confirmed");
+      expect(broadcastCount).toBe(6);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes dispenser broadcasts and applies the durable global window", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "proofline-dispenser-queue-"));
+    const stateFile = join(directory, "claims.json");
+    let activeBroadcasts = 0;
+    let maximumBroadcasts = 0;
+    let transaction = 0;
+    const chainClient: TestUsdcChainClient = {
+      async preflight() {},
+      async broadcast() {
+        activeBroadcasts += 1;
+        maximumBroadcasts = Math.max(maximumBroadcasts, activeBroadcasts);
+        await new Promise<void>((resolve) => setTimeout(resolve, 5));
+        activeBroadcasts -= 1;
+        transaction += 1;
+        return `0x${transaction.toString(16).padStart(64, "0")}` as Hex;
+      },
+      async waitForConfirmation() {
+        return false;
+      },
+    };
+    const dispenser = createTestUsdcDispenser(
+      readRuntimeConfig({
+        PROOFLINE_TEST_USDC_DISPENSER_ENABLED: "true",
+        PROOFLINE_TEST_USDC_DISPENSER_PRIVATE_KEY: generatePrivateKey(),
+        PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY: "q".repeat(32),
+        PROOFLINE_TEST_USDC_DISPENSER_STATE_FILE: stateFile,
+        PROOFLINE_TEST_USDC_DISPENSER_DAILY_CLAIM_LIMIT: "2",
+      }).testUsdcDispenser,
+      chainClient,
+    );
+
+    try {
+      const [first, second] = await Promise.all([
+        dispenser.claim({
+          recipient: `0x${"a".padStart(40, "0")}`,
+          ip: "198.51.100.41",
+        }),
+        dispenser.claim({
+          recipient: `0x${"b".padStart(40, "0")}`,
+          ip: "198.51.100.42",
+        }),
+      ]);
+      expect(first.status).toBe("submitted");
+      expect(second.status).toBe("submitted");
+      expect(maximumBroadcasts).toBe(1);
+      await expect(
+        dispenser.claim({
+          recipient: `0x${"c".padStart(40, "0")}`,
+          ip: "198.51.100.43",
+        }),
+      ).rejects.toMatchObject({
+        code: "global_limit",
+        httpStatus: 429,
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an ambiguous dispenser broadcast pending across a restart", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "proofline-dispenser-pending-"));
+    const stateFile = join(directory, "claims.json");
+    const config = readRuntimeConfig({
+      PROOFLINE_TEST_USDC_DISPENSER_ENABLED: "true",
+      PROOFLINE_TEST_USDC_DISPENSER_PRIVATE_KEY: generatePrivateKey(),
+      PROOFLINE_TEST_USDC_DISPENSER_IP_HASH_KEY: "p".repeat(32),
+      PROOFLINE_TEST_USDC_DISPENSER_STATE_FILE: stateFile,
+    }).testUsdcDispenser;
+    const recipient = `0x${"d".padStart(40, "0")}`;
+    const firstClient: TestUsdcChainClient = {
+      async preflight() {},
+      async broadcast() {
+        throw new Error("ambiguous RPC outcome");
+      },
+      async waitForConfirmation() {
+        return false;
+      },
+    };
+
+    try {
+      const first = createTestUsdcDispenser(config, firstClient);
+      await expect(
+        first.claim({ recipient, ip: "198.51.100.50" }),
+      ).rejects.toMatchObject({
+        code: "claim_pending",
+        httpStatus: 409,
+      });
+      const persisted = JSON.parse(readFileSync(stateFile, "utf8")) as {
+        schema: string;
+        records: Array<Record<string, unknown>>;
+      };
+      expect(persisted).toMatchObject({
+        schema: "proofline.test-usdc-claims.v1",
+        records: [
+          expect.objectContaining({
+            recipient,
+            status: "pending",
+          }),
+        ],
+      });
+      expect(persisted.records[0]?.transactionHash).toBeUndefined();
+
+      const secondClient: TestUsdcChainClient = {
+        preflight: vi.fn(async () => undefined),
+        broadcast: vi.fn(async () => `0x${"e".repeat(64)}` as Hex),
+        waitForConfirmation: vi.fn(async () => true),
+      };
+      const restarted = createTestUsdcDispenser(config, secondClient);
+      await expect(
+        restarted.claim({ recipient, ip: "198.51.100.50" }),
+      ).rejects.toMatchObject({
+        code: "address_cooldown",
+        httpStatus: 429,
+      });
+      expect(secondClient.broadcast).not.toHaveBeenCalled();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

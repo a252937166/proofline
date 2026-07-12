@@ -9,6 +9,7 @@ import type {
   ProofPacketResponse,
   ProofVerificationResponse,
   ReplaySnapshot,
+  TestUsdcClaimResponse,
   VerifyAnchorResponse,
 } from "../types";
 
@@ -161,6 +162,12 @@ export const api = {
   pauseReplay: (signal?: AbortSignal) => request<ReplaySnapshot>("/replay/pause", { method: "POST", ...(signal ? { signal } : {}) }),
 
   getIntegrations: () => request<IntegrationsResponse>("/integrations"),
+
+  claimTestUsdc: (recipient: string) =>
+    request<TestUsdcClaimResponse>("/testnet-usdc/claims", {
+      method: "POST",
+      body: JSON.stringify({ recipient }),
+    }),
 
   getMatchCatalog: () => request<MatchCatalogResponse>("/matches"),
 

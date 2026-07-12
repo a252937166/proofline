@@ -57,6 +57,11 @@ import {
   buildProofSubjectPacket,
   createDelayedSnapshotProofSubject,
 } from "./proof-subject.js";
+import {
+  createTestUsdcDispenser,
+  TestUsdcDispenserError,
+  type TestUsdcDispenser,
+} from "./test-usdc-dispenser.js";
 import type { AnchorRecord } from "./api-types.js";
 
 export interface ApiOptions {
@@ -67,6 +72,7 @@ export interface ApiOptions {
   scheduledMatches?: MatchCatalogEntry[];
   delayedSnapshot?: DelayedSnapshot;
   featuredProofSample?: FeaturedProofSample;
+  testUsdcDispenser?: TestUsdcDispenser;
 }
 
 export interface ApiRuntime {
@@ -75,6 +81,7 @@ export interface ApiRuntime {
   config: RuntimeConfig;
   dataset: ReplayDataset;
   anchorService: AnchorService;
+  testUsdcDispenser: TestUsdcDispenser;
   issuer: {
     address: `0x${string}`;
     keyId: `0x${string}`;
@@ -92,6 +99,8 @@ const WEB_RECOVERY_SESSION_PATTERN = /^web_[0-9a-f]{32}$/;
 const EVENT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const PAID_PROOF_WINDOW_MS = 60_000;
 const PAID_PROOF_WINDOW_LIMIT = 12;
+const TEST_USDC_REQUEST_WINDOW_MS = 60_000;
+const TEST_USDC_REQUEST_WINDOW_LIMIT = 10;
 
 class ProofRecoveryError extends Error {
   constructor(
@@ -232,6 +241,9 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
   }
   const anchorService =
     options.anchorService ?? createAnchorService(config.anchor);
+  const testUsdcDispenser =
+    options.testUsdcDispenser ??
+    createTestUsdcDispenser(config.testUsdcDispenser);
   const configuredIssuerKey = env.PROOFLINE_ISSUER_PRIVATE_KEY?.trim();
   if (
     configuredIssuerKey &&
@@ -578,6 +590,7 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
   const paidProofWindows = new Map<string, number[]>();
   const unsignedProofWindows = new Map<string, number[]>();
   const proofRecoveryWindows = new Map<string, number[]>();
+  const testUsdcRequestWindows = new Map<string, number[]>();
   const rpcProxyWindows = new Map<string, number[]>();
   const mcpRuntime = new McpRuntimeStore(env.PROOFLINE_MCP_AUDIT_FILE);
   const mcpAuditAuthorized = (req: Request): boolean => {
@@ -796,7 +809,12 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
 
   app.get("/api/integrations", (_req, res) => {
     res.json({
-      ...integrationStatus(config, anchorService, env),
+      ...integrationStatus(
+        config,
+        anchorService,
+        testUsdcDispenser.status(),
+        env,
+      ),
       issuer: {
         address: issuer.address,
         keyId: issuer.keyId,
@@ -816,6 +834,65 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
       },
     });
   });
+
+  const testUsdcRequestRateLimit: RequestHandler = (req, res, next) => {
+    const now = Date.now();
+    for (const [candidate, attempts] of testUsdcRequestWindows) {
+      const active = attempts.filter(
+        (at) => at + TEST_USDC_REQUEST_WINDOW_MS > now,
+      );
+      if (active.length === 0) testUsdcRequestWindows.delete(candidate);
+      else if (active.length !== attempts.length) {
+        testUsdcRequestWindows.set(candidate, active);
+      }
+    }
+    const key = req.ip ?? "unknown";
+    const recent = testUsdcRequestWindows.get(key) ?? [];
+    if (recent.length >= TEST_USDC_REQUEST_WINDOW_LIMIT) {
+      res.set("Retry-After", "60");
+      res.status(429).json({
+        error: "test_usdc_claim_rate_limited",
+        message: "Too many test-USDC claim requests from this network. Retry in one minute.",
+      });
+      return;
+    }
+    if (!testUsdcRequestWindows.has(key) && testUsdcRequestWindows.size >= 1_024) {
+      const oldest = testUsdcRequestWindows.keys().next().value as
+        | string
+        | undefined;
+      if (oldest) testUsdcRequestWindows.delete(oldest);
+    }
+    recent.push(now);
+    testUsdcRequestWindows.set(key, recent);
+    next();
+  };
+
+  app.post(
+    "/api/testnet-usdc/claims",
+    testUsdcRequestRateLimit,
+    asyncHandler(async (req, res) => {
+      const recipient =
+        req.body && typeof req.body === "object" && !Array.isArray(req.body)
+          ? (req.body as Record<string, unknown>).recipient
+          : undefined;
+      try {
+        const claim = await testUsdcDispenser.claim({
+          recipient,
+          ip: req.ip ?? "unknown",
+        });
+        res.status(claim.status === "confirmed" ? 201 : 202).json(claim);
+      } catch (error) {
+        if (!(error instanceof TestUsdcDispenserError)) throw error;
+        if (error.retryAfterSeconds !== undefined) {
+          res.set("Retry-After", String(error.retryAfterSeconds));
+        }
+        res.status(error.httpStatus).json({
+          error: error.code,
+          message: error.message,
+        });
+      }
+    }),
+  );
 
   app.get("/api/mcp/runtime", (_req, res) => {
     res.json(mcpRuntime.snapshot());
@@ -1801,7 +1878,16 @@ export function createApi(options: ApiOptions = {}): ApiRuntime {
     },
   );
 
-  return { app, engine, config, dataset, anchorService, issuer, dispose };
+  return {
+    app,
+    engine,
+    config,
+    dataset,
+    anchorService,
+    testUsdcDispenser,
+    issuer,
+    dispose,
+  };
 }
 
 export function createApp(options: ApiOptions = {}): Express {
