@@ -774,9 +774,32 @@ test.describe("judge-first wallet workspace", () => {
     await expect(page.getByTestId("submit-proof-payment")).toContainText("signature 1/2");
     await page.getByTestId("submit-proof-payment").click();
     await expect(page.getByTestId("proof-binding-handoff")).toContainText(/Signature 1\/2 confirmed · no payment sent[\s\S]*Nebula Key/);
+    const bindingButton = page.getByTestId("submit-proof-binding");
+    await expect(bindingButton).toBeFocused();
+    await expect(bindingButton).toBeInViewport();
+    const actionScroll = await page.getByTestId("judge-action-scrollport").evaluate((element) => {
+      const button = element.querySelector<HTMLElement>("[data-testid='submit-proof-binding']");
+      const viewport = element.getBoundingClientRect();
+      const buttonRect = button?.getBoundingClientRect();
+      return {
+        overflowY: getComputedStyle(element).overflowY,
+        scrollTop: element.scrollTop,
+        scrollHeight: element.scrollHeight,
+        clientHeight: element.clientHeight,
+        buttonTop: buttonRect?.top ?? 0,
+        buttonBottom: buttonRect?.bottom ?? 0,
+        viewportTop: viewport.top,
+        viewportBottom: viewport.bottom,
+      };
+    });
+    expect(actionScroll.overflowY).toBe("auto");
+    expect(actionScroll.scrollHeight).toBeGreaterThan(actionScroll.clientHeight);
+    expect(actionScroll.scrollTop).toBeGreaterThan(0);
+    expect(actionScroll.buttonTop).toBeGreaterThanOrEqual(actionScroll.viewportTop);
+    expect(actionScroll.buttonBottom).toBeLessThanOrEqual(actionScroll.viewportBottom);
     expect(paymentHeaders).toEqual([]);
 
-    await page.getByTestId("submit-proof-binding").click();
+    await bindingButton.click();
     await expect(page.getByText("SAFE TO SETTLE", { exact: true })).toBeVisible({ timeout: 20_000 });
     await expect(page.locator(".verification-layers")).toContainText("Integrity");
     await expect(page.locator(".verification-layers")).toContainText("Issuer signature");
