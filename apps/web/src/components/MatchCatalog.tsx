@@ -7,7 +7,6 @@ import type {
   CatalogMatchDetail,
   EventObservation,
   MatchCatalogEntry,
-  MatchCatalogResponse,
 } from "../types";
 
 type FreshCheckState = "idle" | "running" | "passed" | "failed";
@@ -211,38 +210,6 @@ function SourceSignal({ observation, index }: { observation: EventObservation; i
       </div>
       <code title={hash}>{shortHash(hash, 8, 6)}</code>
     </article>
-  );
-}
-
-export function MatchCatalogBar({ catalog, selectedId, detail, onSelect }: {
-  catalog: MatchCatalogResponse | null;
-  selectedId: string;
-  detail: CatalogMatchDetail | null;
-  onSelect: (id: string) => void;
-}) {
-  if (!catalog?.matches.length) return null;
-  const selected = catalog.matches.find((entry) => entry.id === selectedId) ?? catalog.matches[0]!;
-  const sourceGroups = new Set(
-    evidenceEvent(detail)?.observations.map((observation) => observation.source.independenceGroup) ?? [],
-  ).size;
-  return (
-    <section className="match-catalog-bar" aria-label="2026 and replay match selector">
-      <div className="catalog-selector">
-        <label htmlFor="match-catalog">Evidence case</label>
-        <select id="match-catalog" value={selected.id} onChange={(event) => onSelect(event.target.value)} data-testid="match-selector">
-          {catalog.matches.map((entry) => <option key={entry.id} value={entry.id}>{entry.season} · {entry.label} · {entry.dataMode}</option>)}
-        </select>
-      </div>
-      <div className="catalog-mode" data-mode={selected.dataMode}>
-        <span>{selected.dataMode.replaceAll("-", " ")}</span>
-        <p>{selected.disclosure}</p>
-        {selected.freshnessStatus && <em className="freshness-chip" data-freshness={selected.freshnessStatus}>{selected.freshnessStatus.replaceAll("-", " ")}</em>}
-      </div>
-      <div className="catalog-source">
-        <span>{sourceGroups > 0 ? `${sourceGroups} independent source groups` : "Source snapshot"}</span>
-        <a href={selected.source.url} target="_blank" rel="noreferrer">{selected.source.label} ↗</a>
-      </div>
-    </section>
   );
 }
 

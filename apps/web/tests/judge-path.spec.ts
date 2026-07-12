@@ -728,6 +728,33 @@ test.describe("judge-first wallet workspace", () => {
     await expect(page.locator("body")).not.toContainText(/OKX|MetaMask/i);
   });
 
+  test("uses a branded, keyboard-accessible evidence case menu instead of a native select", async ({ page }) => {
+    await mockApi(page, { live: true });
+    await page.goto("/");
+
+    const trigger = page.getByTestId("match-selector-trigger");
+    await expect(trigger).toContainText("France vs Morocco");
+    await expect(page.locator(".header-case-selector select")).toHaveCount(0);
+    await trigger.click();
+
+    const menu = page.getByTestId("match-selector-menu");
+    await expect(menu).toBeVisible();
+    await expect(menu.getByRole("option")).toHaveCount(3);
+    await expect(menu).toContainText("Case manifest");
+    await expect(menu).toContainText("historical replay");
+
+    await page.getByTestId("match-option-WC-2026-M99-NOR-ENG").click();
+    await expect(page.getByTestId("match-selector")).toHaveValue("WC-2026-M99-NOR-ENG");
+    await expect(page).toHaveURL(/case=WC-2026-M99-NOR-ENG/);
+    await expect(menu).toHaveCount(0);
+
+    await trigger.press("ArrowDown");
+    await expect(page.getByTestId("match-selector-menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("match-selector-menu")).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  });
+
   test("wallet → review → signature 1 → signature 2 → three-layer verification", async ({ page }) => {
     const paymentHeaders: string[] = [];
     await installEip6963Wallets(page, { names: ["Orbit Vault", "Nebula Key"] });

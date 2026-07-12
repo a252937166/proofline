@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import { JudgeDemo } from "./components/JudgeDemo";
+import { CaseSelector } from "./components/CaseSelector";
 import {
   CatalogMatchView,
   ConflictReplayEntry,
@@ -401,12 +402,12 @@ function AppHeader({ integrations, mode = "replay", catalog, activeMatchId, onSe
         <span>PROOF</span><i /><span>LINE</span>
       </a>
       {catalog?.matches.length && activeMatchId && onSelectMatch ? (
-        <label className="header-case-selector">
-          <span>Evidence case</span>
-          <select value={activeMatchId} onChange={(event) => onSelectMatch(event.target.value)} disabled={matchSelectionDisabled} data-testid="match-selector">
-            {catalog.matches.map((entry) => <option key={entry.id} value={entry.id}>{entry.label} · {entry.dataMode}</option>)}
-          </select>
-        </label>
+        <CaseSelector
+          catalog={catalog}
+          activeMatchId={activeMatchId}
+          onSelect={onSelectMatch}
+          disabled={matchSelectionDisabled}
+        />
       ) : <div className="mode-lockup" aria-label="Data mode" data-mode={mode}><span className="mode-pulse" /><div><strong>Loading evidence</strong><small>Checking runtime state</small></div></div>}
       <div className="integration-strip" aria-label="Integration modes">
         <span><i className={chain.tone} />Injective {chain.label}</span>
